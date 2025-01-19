@@ -5,6 +5,7 @@
 #     "marimo",
 #     "matplotlib==3.10.0",
 #     "numpy==2.2.1",
+#     "scipy==1.15.1",
 #     "sympy==1.13.3",
 # ]
 # ///
@@ -252,24 +253,109 @@ def _(J_0_hat, J_2_hat, L_1, L_2, Matrix, g, l_2, m_2):
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md("""## Simulate this""")
+    mo.md(
+        """
+        ## Simulate open loop (no control)
+
+        Our open loop equation is:
+        $$\\dot{x} = \mathbf{A}x$$
+
+        If $\mathbf{A}$ has eignenvectors $\\mathbf{T}$ and eigenvalues $\\mathbf{D}$
+
+        $$ x(t) = \mathbf{T}e^{\mathbf{D}t} \mathbf{T}^{-1} x(0) $$
+        """
+    )
     return
 
 
-@app.cell
-def _(A, B, Eq, constant_values, diff, u, x, τ_1, τ_2):
-    # For the easiest case tau=0
+@app.cell(hide_code=True)
+def _(A, constant_values, mo, np, sympy):
+    A_sub = sympy.matrix2numpy(A.subs(constant_values), dtype=complex) # Note need to set dtype to float for eig to work
 
-    eqn = Eq(diff(x), (A*x + B*u).subs(constant_values).subs({τ_1:0, τ_2:0}))
-    eqn
-    return (eqn,)
+    def np_to_latex(a, dp=3):
+        ''' Display a numpy matrix as latex. Fixme, doesn't show imaginary part?'''
+        # return latex(sympy.Matrix(a))
+
+        a = a.round(dp)
+        if len(a.shape) > 2:
+            raise ValueError('bmatrix can at most display two dimensions')
+
+        with np.printoptions(precision=2, suppress=True, threshold=5):
+            lines = str(a).replace('[', '').replace(']', '').splitlines()
+        rv = [r'\begin{bmatrix}']
+        rv += ['  ' + ' & '.join(l.split()) + r'\\' for l in lines]
+        rv +=  [r'\end{bmatrix}']
+        return '\n'.join(rv)
+
+
+    # Equivalent to matlab eig(), see https://stackoverflow.com/a/51248586
+    T, D = np.linalg.eig(A_sub)
+
+    mo.md(f"""
+    Substituting `constant_values` in: $$A={np_to_latex(A_sub)}$$
+
+    Giving eigenvectors and esigenvalues `T, D = np.linalg.eig(A_sub)`:
+
+    **FIXME: Why is T not square?**
+
+    $$T = {np_to_latex(T)}   \\quad D={np_to_latex(D)}$$
+
+    """)
+    return A_sub, D, T, np_to_latex
+
+
+@app.cell
+def _(D, T, expm, np, plt):
+
+    x_0 = [0, np.pi, 1E-6, 1E-6] # Pointing straight up, no velocity
+
+    _t = np.linspace(0, 0.1, 1000)
+
+    # Simulate the system
+    # Fixme, why does this not broadcast across, and so we have to use a loop?
+    _x_sim = np.zeros((len(_t), 4))
+    for _ts, i in enumerate(_t):
+        print(D)
+        _x_sim[_ts:] = T @ expm(D*_ts) @ np.linalg.inv(T) @ x_0
+
+    print(_x_sim[:10])
+    _fig, _ax = plt.subplots()
+
+    _ax.plot(_t, _x_sim[:,0], label="Theta 1")
+    _ax.plot(_t, _x_sim[:,1], label="Theta 2")
+
+    plt.show()
+    return i, x_0
+
+
+@app.cell
+def _(A_matrix, expm, np, plt):
+    # Discretise the system matrix
+    _dt = 1E-3
+    A_d = expm(A_matrix*_dt)
+
+
+    # Now simulate
+    _t = np.arange(0, 1, _dt)
+
+    _x_sim = np.zeros((len(_t), 4)) # Theta 1, Theta 2, Theta 1 dot, Theta 2 dot
+    _x_sim[0] = [0, np.pi, 0.01, 0.01] # Pointing straight up, small velocity
+    for _i, _ts in enumerate(_t):
+        _x_sim[_i:] = A_d @ _x_sim[_i-1]
+
+    #Plot
+    _fig, _ax = plt.subplots()
+    _ax.plot(_t, _x_sim[:,0], label="Theta 1")
+    _ax.plot(_t, _x_sim[:,1], label="Theta 2")
+    _ax.legend()
+    return (A_d,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(
         r"""
-        ## Now check for stability
+        ## Check for stability
 
         Using the real values of the constants
         """
@@ -281,7 +367,6 @@ def _(mo):
 def _(A, constant_values, sympy):
     # First, with no input (u = 0), do we get any positive eigenvalues? If so, the system is unstable
     sympy.matrix2numpy(A.subs(constant_values))
-
     return
 
 
@@ -295,7 +380,6 @@ def _(A, B, Matrix, constant_values):
     ])
 
     (A - B*K).subs(constant_values).eigenvals()
-
     return (K,)
 
 
@@ -348,11 +432,12 @@ def _(control, plt, statespace):
 def _():
     import marimo as mo
     import sympy
-    from sympy import symbols, Integral, Eq, solve, diff, Function, integrate, exp, sqrt, pi, sin, cos, tan, log, diff, simplify, solve, Matrix, S, lambdify
+    from sympy import symbols, Integral, Eq, solve, diff, Function, integrate, exp, sqrt, pi, sin, cos, tan, log, diff, simplify, solve, Matrix, S, lambdify, simplify
     from sympy.physics.mechanics  import dynamicsymbols, mechanics_printing
     from sympy.solvers.ode.systems import dsolve_system
     from sympy import latex
     from sympy.physics.vector.printing import vlatex
+    from scipy.linalg import expm
     mechanics_printing()
     return (
         Eq,
@@ -365,6 +450,7 @@ def _():
         dsolve_system,
         dynamicsymbols,
         exp,
+        expm,
         integrate,
         lambdify,
         latex,
