@@ -269,24 +269,8 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(A, constant_values, mo, np, sympy):
-    A_sub = sympy.matrix2numpy(A.subs(constant_values), dtype=complex) # Note need to set dtype to float for eig to work
-
-    def np_to_latex(a, dp=3):
-        ''' Display a numpy matrix as latex. Fixme, doesn't show imaginary part?'''
-        # return latex(sympy.Matrix(a))
-
-        a = a.round(dp)
-        if len(a.shape) > 2:
-            raise ValueError('bmatrix can at most display two dimensions')
-
-        with np.printoptions(precision=2, suppress=True, threshold=5):
-            lines = str(a).replace('[', '').replace(']', '').splitlines()
-        rv = [r'\begin{bmatrix}']
-        rv += ['  ' + ' & '.join(l.split()) + r'\\' for l in lines]
-        rv +=  [r'\end{bmatrix}']
-        return '\n'.join(rv)
-
+def _(A, constant_values, mo, np, np_to_latex, sympy):
+    A_sub = sympy.matrix2numpy(A.subs(constant_values), dtype=float) # Note need to set dtype to float for eig to work
 
     # Equivalent to matlab eig(), see https://stackoverflow.com/a/51248586
     T, D = np.linalg.eig(A_sub)
@@ -301,7 +285,7 @@ def _(A, constant_values, mo, np, sympy):
     $$T = {np_to_latex(T)}   \\quad D={np_to_latex(D)}$$
 
     """)
-    return A_sub, D, T, np_to_latex
+    return A_sub, D, T
 
 
 @app.cell
@@ -355,67 +339,67 @@ def _(A_matrix, expm, np, plt):
 def _(mo):
     mo.md(
         r"""
-        ## Check for stability
+        ## Check for Controlability
 
-        Using the real values of the constants
+        Using the real values of the constants into A and B, do we get a rank of 4 (size of the state space)?
         """
     )
     return
 
 
 @app.cell
-def _(A, constant_values, sympy):
-    # First, with no input (u = 0), do we get any positive eigenvalues? If so, the system is unstable
-    sympy.matrix2numpy(A.subs(constant_values))
+def _(A_sub, B, constant_values, control, np, sympy):
+    B_sub = sympy.matrix2numpy(B.subs(constant_values),dtype=float)
+
+    np.linalg.matrix_rank(control.ctrb(A_sub, B_sub))
+    return (B_sub,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""## Make Pole Placement Controller""")
     return
 
 
 @app.cell
-def _(A, B, Matrix, constant_values):
-    # Now lets try a control matrix K
-    # TODO: Need to check which way round this is!
-    K = Matrix([
-        [0, 0, 0, 0],
-        [0, 0.01, 1, 0.05], # Tau 2 (disturbance torque), we can't apply so set to zero
-    ])
+def _(A_sub, B_sub, control, mo, np, np_to_latex):
+    K = control.place(A_sub, B_sub, [-1.1, -1.2, -1.3, -1.4])
 
-    (A - B*K).subs(constant_values).eigenvals()
+
+    mo.md(f"""
+    Using `control.place(A,B,desired_poles)`
+
+    Control matrix $K={np_to_latex(K.T,dp=4)}$
+
+    Eigenvalues of system are now: {np.linalg.eig(A_sub - B_sub @ K)[0]}
+    """)
+
     return (K,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
-    mo.md(
-        r"""
-        ## Make LQR controller with Python Control
-
-        FIXME: Doesn't seem to do anything, just heads off into infinity
-        """
-    )
+    mo.md("""Plot startup behaviour. Should ideally return to zero!""")
     return
 
 
 @app.cell
-def _():
-    import numpy as np
-    import control
-    from matplotlib import pyplot as plt
-    return control, np, plt
-
-
-@app.cell
-def _(A, B, constant_values, control, mo, plt, sympy):
+def _(A, B, K, constant_values, control, mo, np, plt, sympy):
     A_matrix = sympy.matrix2numpy(A.subs(constant_values))
     B_matrix = sympy.matrix2numpy(B.subs(constant_values))
 
     C_matrix = [0, 0, 0, 0] # Control matrix. TODO: What is order?
     D_matrix = [0, 0] # Feed through, zero
 
-    statespace = control.StateSpace(A_matrix, B_matrix, C_matrix, D_matrix)
+    statespace = control.StateSpace(A_matrix, B_matrix, K[1], D_matrix)
 
-    _resp = control.initial_response(statespace, T=0.1, X0=[0, 0.1, 0, 0]) # Simulate one second of time
+    _resp = control.initial_response(statespace, T=0.1, X0=[0, np.pi, 0, 0]) # Simulate one second of time
 
-    plt.plot(_resp.t, _resp.x[1])
+    plt.plot(_resp.t, _resp.x[2], label="$\\theta_1$")
+    plt.plot(_resp.t, _resp.x[3], label="$\\theta_2$")
+    plt.ylabel("Angle (rad)")
+    plt.xlabel("Time (s)")
+    plt.legend()
     mo.mpl.interactive(plt.gcf())
     return A_matrix, B_matrix, C_matrix, D_matrix, statespace
 
@@ -429,6 +413,12 @@ def _(control, plt, statespace):
 
 
 @app.cell(hide_code=True)
+def _(mo):
+    mo.md("""## Imports and convenience functions""")
+    return
+
+
+@app.cell
 def _():
     import marimo as mo
     import sympy
@@ -438,6 +428,9 @@ def _():
     from sympy import latex
     from sympy.physics.vector.printing import vlatex
     from scipy.linalg import expm
+    import numpy as np
+    import control
+    from matplotlib import pyplot as plt
     mechanics_printing()
     return (
         Eq,
@@ -445,6 +438,7 @@ def _():
         Integral,
         Matrix,
         S,
+        control,
         cos,
         diff,
         dsolve_system,
@@ -457,7 +451,9 @@ def _():
         log,
         mechanics_printing,
         mo,
+        np,
         pi,
+        plt,
         simplify,
         sin,
         solve,
@@ -467,6 +463,25 @@ def _():
         tan,
         vlatex,
     )
+
+
+@app.cell
+def _(np):
+    def np_to_latex(a, dp=3):
+        ''' Display a numpy matrix as latex. Fixme, doesn't show imaginary part?'''
+        # return latex(sympy.Matrix(a))
+
+        a = a.round(dp)
+        if len(a.shape) > 2:
+            raise ValueError('bmatrix can at most display two dimensions')
+
+        with np.printoptions(precision=dp, suppress=True, threshold=5):
+            lines = str(a).replace('[', '').replace(']', '').splitlines()
+        rv = [r'\begin{bmatrix}']
+        rv += ['  ' + ' & '.join(l.split()) + r'\\' for l in lines]
+        rv +=  [r'\end{bmatrix}']
+        return '\n'.join(rv)
+    return (np_to_latex,)
 
 
 @app.cell
