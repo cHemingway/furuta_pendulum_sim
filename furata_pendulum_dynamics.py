@@ -414,6 +414,53 @@ def _(control, plt, statespace):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.md(r"""## Make LQR Controller""")
+    return
+
+
+@app.cell
+def _(A_sub, B_sub, control, mo, np, np_to_latex):
+    C = np.eye(4)
+
+    # TODO: Choose Q and R based on Bryson's rule
+    Q = np.diag([1, 1, 10, 100])
+    R = np.diag([1, 1000])
+
+    K_lqr, S_lqr, E_lqr = control.lqr(A_sub, B_sub, Q, R)
+
+    mo.md(f"$K_{{LQR}} = {np_to_latex(K_lqr.T)}$ $\\lambda = {np_to_latex(E_lqr)}$")
+    return C, E_lqr, K_lqr, Q, R, S_lqr
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        """
+        ## Convert gains back to real units
+
+        Torque is in units of Nm, but our motor is not directly controlled in this.
+
+        We use **voltage** control, so Torque $\\tau= \\frac{K_t}{R}V$
+
+        - For our GM3506 Motor, we have $R=5.6$ and $K_v = 140$ RPM/Volt, from which we can work out $K_t$
+        - Convert Kv into SI Units, $K_v = \\frac{60 * 2*\pi}{60} = 2\\pi$ (conveniently) = 14.66
+        - Therefore we have scaler $\\frac{K_{v}}{R} = 6.28/5.6 = 2.61 Nm / V$
+
+        Note, this only works as we have limited back EMF from not moving very fast!
+
+        """
+    )
+    return
+
+
+@app.cell
+def _(K_lqr, mo, np_to_latex):
+    mo.md(f"$K_{{LQR}} = {np_to_latex(K_lqr.T*2.61)}$")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md("""## Imports and convenience functions""")
     return
 
