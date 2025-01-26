@@ -147,8 +147,8 @@ def _(Eq, mo, symbols):
         L_2: 0.0703,  # From axis to end face in solidworks
         J_1: 0.00053, # Rough guess at 10x L2, as solidworks failed to find this OK
         J_2: 0.0000053,
-        b1: 1E-6, # Assume no friction
-        b2: 1E-6 # Assume no friction
+        b1: 0.85, # Assume same as measured b2
+        b2: 0.85 # See pendulum_damping.py for how we measured this
     }
 
 
@@ -290,7 +290,6 @@ def _(A, constant_values, mo, np, np_to_latex, sympy):
 
 @app.cell
 def _(D, T, expm, np, plt):
-
     x_0 = [0, np.pi, 1E-6, 1E-6] # Pointing straight up, no velocity
 
     _t = np.linspace(0, 0.1, 1000)
@@ -373,7 +372,6 @@ def _(A_sub, B_sub, control, mo, np, np_to_latex):
 
     Eigenvalues of system are now: {np.linalg.eig(A_sub - B_sub @ K)[0]}
     """)
-
     return (K,)
 
 
@@ -422,14 +420,27 @@ def _(mo):
 def _(A_sub, B_sub, control, mo, np, np_to_latex):
     C = np.eye(4)
 
-    # TODO: Choose Q and R based on Bryson's rule
+    def brysons_rule(z_max, u_max):
+        Q = np.diag(1/np.power(z_max,2))
+        R = np.diag(1/np.power(u_max,2))
+        return Q,R
+
+    # TODO: Is this OK for R?
     Q = np.diag([1, 1, 10, 100])
-    R = np.diag([1, 1000])
+    R = np.diag([0.0001] * 2)
 
-    K_lqr, S_lqr, E_lqr = control.lqr(A_sub, B_sub, Q, R)
+    Q, R = brysons_rule(
+        z_max = [1, 0.1, 0.1, 0.01], # Penalize error in pendulum angle/velocity most
+        u_max = [0.2, 0.001] # Max torque is 0.2Nm
+    )
 
-    mo.md(f"$K_{{LQR}} = {np_to_latex(K_lqr.T)}$ $\\lambda = {np_to_latex(E_lqr)}$")
-    return C, E_lqr, K_lqr, Q, R, S_lqr
+    K_lqr = control.lqr(A_sub, B_sub, Q, R)[0]
+
+    mo.md(f"""$K_{{LQR}} = {np_to_latex(K_lqr.T)}$
+
+    First column is output $\\tau_1$, second is $\\tau_2$
+    """)
+    return C, K_lqr, Q, R, brysons_rule
 
 
 @app.cell(hide_code=True)
@@ -447,15 +458,19 @@ def _(mo):
         - Therefore we have scaler $\\frac{K_{v}}{R} = 6.28/5.6 = 2.61 Nm / V$
 
         Note, this only works as we have limited back EMF from not moving very fast!
-
         """
     )
     return
 
 
 @app.cell
-def _(K_lqr, mo, np_to_latex):
-    mo.md(f"$K_{{LQR}} = {np_to_latex(K_lqr.T*2.61)}$")
+def _(K_lqr, Matrix, latex, mo, np, np_to_latex, x):
+    _k_symbolic = Matrix(np.round(K_lqr*2.61, 3))
+    mo.md(f"""Gains $K_{{LQR}} = {np_to_latex(K_lqr.T*2.61)}$
+
+    Ignoring the second column as its usefully very small (we can't set $\\theta_2$ anyway)
+    $$\\dot\\theta_1 = {latex((_k_symbolic * x)[0])}$$
+    """)
     return
 
 
