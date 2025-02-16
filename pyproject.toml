@@ -12,4 +12,10 @@ dependencies = [
     "numpy==2.2.1",
     "scipy==1.15.1",
     "sympy==1.13.3",
+    "mediapy>=1.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
 ]

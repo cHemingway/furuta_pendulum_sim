@@ -3,9 +3,16 @@
 A project to simulate a furuta pendulum and design a controller for it, to teach myself modern control theory.
 
 ### Files
-- [furata_pendulum_dynamics.py](furata_pendulum_dynamics.py) - General grab bag of linear model and controller. In [marimo](https://marimo.io/) format with embedded dependencies
+- [furata_pendulum_dynamics.py](furata_pendulum_dynamics.py) - General grab bag of linear model and controller. In [marimo](https://marimo.io/) format
 - [pendulum_damping.py](pendulum_damping.py) - Attempt to measure damping of pendulum axis via measuring ringdown.
-- [mujoco_sim.py] - Simulate our actual controller using MuCoJo.  Dependencies in pyproject.toml
+- [mujoco_sim.py] - Simulate our actual controller using MuCoJo.  
+
+
+### Install / dependencies
+- Python dependencies in pyproject.toml
+- To render video from mujoco_sim, you need ffmpeg
+    - On windows 10+ `winget install ffmpeg`
+    - On linux/osx, you know what to do
 
 ### Credits
 - Pendulum dynamics from [On the Dynamics of the Furuta Pendulum](https://onlinelibrary.wiley.com/doi/10.1155/2011/528341)
