@@ -1,6 +1,6 @@
 import marimo
 
-__generated_with = "0.10.14"
+__generated_with = "0.11.5"
 app = marimo.App(width="medium")
 
 
@@ -168,7 +168,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(J_1, J_2, L_1, l_1, l_2, latex, m_1, m_2, mo):
     J_1_hat = J_1 + m_1*l_1**2
     mo.output.append(mo.md(f"Total moment of interia of arm 1 about pivot point: $\\hat{{J_1}} = {latex(J_1_hat)}$"))
@@ -338,7 +338,7 @@ def _(mo):
 def _(A_sub, B, constant_values, control, np, sympy):
     B_sub = sympy.matrix2numpy(B.subs(constant_values),dtype=float)
 
-    np.linalg.matrix_rank(control.ctrb(A_sub, B_sub))
+    f"{np.linalg.matrix_rank(control.ctrb(A_sub, B_sub))=}"
     return (B_sub,)
 
 
@@ -404,8 +404,8 @@ def _(mo):
     return
 
 
-app._unparsable_cell(
-    r"""
+@app.cell
+def _(A_sub, B_sub, control, mo, np, np_to_latex):
     C = np.eye(4)
 
     def brysons_rule(z_max, u_max):
@@ -413,8 +413,8 @@ app._unparsable_cell(
         R = np.diag(1/np.power(u_max,2))
         return Q,R
 
-    # Q from \"Swing-up and LQR stabilization of rotary inverted pendulum\", Park,Kim,Lee
-    Q = np.diag([10, 1, 50, 1]
+    # Q from "Swing-up and LQR stabilization of rotary inverted pendulum", Park,Kim,Lee
+    Q = np.diag([1, 1, 50, 100])
     # Todo: Why did we choose this value of R?
     R = np.diag([0.0001] * 2)
 
@@ -425,13 +425,11 @@ app._unparsable_cell(
 
     K_lqr = control.lqr(A_sub, B_sub, Q, R)[0]
 
-    mo.md(f\"\"\"$K_{{LQR}} = {np_to_latex(K_lqr.T)}$
+    mo.md(f"""$K_{{LQR}} = {np_to_latex(K_lqr.T)}$
 
     First column is output $\\tau_1$, second is $\\tau_2$
-    \"\"\")
-    """,
-    name="_"
-)
+    """)
+    return C, K_lqr, Q, R, brysons_rule
 
 
 @app.cell(hide_code=True)
