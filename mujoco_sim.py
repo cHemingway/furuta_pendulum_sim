@@ -1,10 +1,12 @@
 import time
+import numpy as np
 import mujoco
 import mujoco.viewer
 
 class FurataPendulumSim:
-    def __init__(self, constants: dict = None):
+    def __init__(self, constants: dict = None, control_k = None):
         self.constants = constants
+        self.control_k = control_k
         self.model, self.data = self._create_pendulum()
 
     def _create_pendulum(self) -> tuple[mujoco.MjModel, mujoco.MjData]:
@@ -22,17 +24,25 @@ class FurataPendulumSim:
             # We use built in interial calcs for now. TODO: Why does interia not work properly?
 
             # FIXME: Why are these values so much smaller than expected to get a decent sim?
-            arm1.joints[0].damping = 0.0004
-            arm2.joints[0].damping = 0.0001
-
-            arm1.joints[0].frictionloss = 1E-4
-            arm2.joints[0].frictionloss = 1E-8
+            arm1.joints[0].damping = 0.0002
+            arm2.joints[0].damping = 0.00001
 
         model = spec.compile()
         data = mujoco.MjData(model)
 
         return model, data
     
+    def control(self, data: mujoco.MjData):
+        # Get our current system state (using control theory terminology)
+        pos = data.qpos[0:2] # [theta_1, theta_2]
+        vel = data.qvel[0:2] # [theta_1_dot, theta_2_dot]
+        x = [pos[0], pos[1], vel[0], vel[1]] # [theta_1, theta_2, theta_1_dot, theta_2_dot]
+        
+        if self.control_k is not None:
+            # Calculate the control input
+            u = - (self.control_k @ x) # u = -Kx
+            data.ctrl[0] = u
+            
 
     def launch_interactive_sim(self, duration: int = 30):
         self.data.qpos[1] = 0.1
@@ -40,11 +50,14 @@ class FurataPendulumSim:
         with mujoco.viewer.launch_passive(self.model, self.data, show_left_ui=False, show_right_ui=False) as viewer:
             start = time.time()
             with viewer.lock():
+                viewer.cam.distance = 0.75 # Zoom in with the camera
                 viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_INERTIA] = True
-                
+                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_JOINT] = True
+                viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_ACTUATOR] = True
 
             while viewer.is_running() and time.time() - start < duration:
                 step_start = time.time()
+                self.control(self.data)
                 mujoco.mj_step(self.model, self.data)
                 viewer.sync()
 
@@ -67,7 +80,11 @@ if __name__ == '__main__':
         "b2": 0.85 
     }
 
-    sim = FurataPendulumSim(constant_values)
+    control_k = np.array([
+        1.65, 0.14, 0.033, 0.15
+    ])
+
+    sim = FurataPendulumSim(constant_values, control_k)
     sim.launch_interactive_sim()
 
 
