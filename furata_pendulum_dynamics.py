@@ -416,8 +416,8 @@ def _(mo):
     return
 
 
-@app.cell
-def _(A_sub, B_sub, control, mo, np, np_to_latex):
+app._unparsable_cell(
+    r"""
     C = np.eye(4)
 
     def brysons_rule(z_max, u_max):
@@ -425,22 +425,25 @@ def _(A_sub, B_sub, control, mo, np, np_to_latex):
         R = np.diag(1/np.power(u_max,2))
         return Q,R
 
-    # TODO: Is this OK for R?
-    Q = np.diag([1, 1, 10, 100])
+    # Q from \"Swing-up and LQR stabilization of rotary inverted pendulum\", Park,Kim,Lee
+    Q = np.diag([10, 1, 50, 1]
+    # Todo: Why did we choose this value of R?
     R = np.diag([0.0001] * 2)
 
-    Q, R = brysons_rule(
-        z_max = [1, 0.1, 0.1, 0.01], # Penalize error in pendulum angle/velocity most
-        u_max = [0.2, 0.001] # Max torque is 0.2Nm
-    )
+    #Q, R = brysons_rule(
+    #    z_max = [1, 0.1, 0.1, 0.01], # Penalize error in pendulum angle/velocity most
+    #    u_max = [0.2, 0.001] # Max torque is 0.2Nm
+    #)
 
     K_lqr = control.lqr(A_sub, B_sub, Q, R)[0]
 
-    mo.md(f"""$K_{{LQR}} = {np_to_latex(K_lqr.T)}$
+    mo.md(f\"\"\"$K_{{LQR}} = {np_to_latex(K_lqr.T)}$
 
     First column is output $\\tau_1$, second is $\\tau_2$
-    """)
-    return C, K_lqr, Q, R, brysons_rule
+    \"\"\")
+    """,
+    name="_"
+)
 
 
 @app.cell(hide_code=True)
