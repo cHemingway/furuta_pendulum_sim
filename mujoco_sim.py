@@ -66,7 +66,7 @@ class FurataPendulumSim:
         if initial_state is not None:
             self.set_state_vector(self.data, initial_state)
 
-        with mujoco.Renderer(self.model) as renderer:
+        with mujoco.Renderer(self.model, width=640, height=480) as renderer:
 
             for i in range(sim_steps):
                 self.control(self.data)
@@ -130,28 +130,36 @@ if __name__ == '__main__':
     }
 
     control_k = np.array([
-        1.65, 0.14, 0.033, 0.15
+        0.01, 0.5, 0, 0.01
     ])
 
     sim = FurataPendulumSim(constant_values, control_k)
 
+    duration = 5
+
     print("Testing interactive sim")
-    sim.launch_interactive_sim(duration=5)
+    sim.launch_interactive_sim(duration=30)
 
     print("Testing non interactive simulation")
-    frames, x_hist, u_hist = sim.simulate(initial_state=[0, np.pi, 0, 0.1])
+    
+    frames, x_hist, u_hist = sim.simulate(duration=duration, initial_state=[0, 0, 0, 0.3])
 
     try:
         media.write_video("./sim.mp4",frames, fps=60)
     except Exception as e:
         print("Failed to show video", e)
 
-    fig, ax = plt.subplots(2, 1)
-    ax[0].plot(x_hist)
+
+    t = np.linspace(0, duration, x_hist.shape[0])
+    fig, ax = plt.subplots(2, 1, sharex=True, figsize=(10, 6))
+    ax[0].plot(t, x_hist, label=["theta_1", "theta_2", "theta_1_dot", "theta_2_dot"])
+    ax[0].legend()
     ax[0].set_title("State vector")
 
-    ax[1].plot(u_hist)
+    ax[1].plot(t[0:,], u_hist)
     ax[1].set_title("Control input")
+    ax[1].set_ylabel("Torque (Nm)")
+    ax[1].set_xlabel("Time (s)")
     plt.show()
     
 
