@@ -6,4 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "mujoco>=3.2.7",
+    "control==0.10.1",
+    "marimo",
+    "matplotlib==3.10.0",
+    "numpy==2.2.1",
+    "scipy==1.15.1",
+    "sympy==1.13.3",
 ]
