@@ -23,6 +23,9 @@
 
   <worldbody>
 
+    <!-- Camera -->
+    <camera pos="0.000 -0.534 0.534" xyaxes="1.000 -0.000 0.000 0.000 0.707 0.707"/>
+
     <!-- Floor -->
     <geom contype="1" friction=".5 0.005 0.0001" name="floor" pos="0 0 0.0" size="0 0 .25"
       type="plane" material="matplane" condim="3" />
@@ -30,13 +33,13 @@
     <!-- Pendulum -->
     <geom size="0.025 0.08" pos="0 0 0.08" type="cylinder" rgba="0.8 0.8 0.8 1" />
     <body name="arm1" pos="0 0 0.184">
-      <inertial pos="0.05415 0 0" quat="0.5 0.5 0.5 0.5" mass="0.040466"
-        diaginertia="2.40543e-05 2.40543e-05 1e-06" />
+      <!-- <inertial pos="0.05415 0 0" quat="0.5 0.5 0.5 0.5" mass="0.040466"
+        diaginertia="2.40543e-05 2.40543e-05 1e-06" /> -->
       <joint name="joint0" pos="0 0 0" axis="0 0 1" damping="0.008" />
       <geom size="0.005 0.042" pos="0.042 0 0" quat="0.707107 0 0.707107 0" type="cylinder"
         rgba="0.8 0.8 0.8 1" />
       <body name="arm2" pos="0.093525 0 0" quat="1 0 0 0">
-        <inertial pos="0 0 0.096608" mass="0.009801" diaginertia="1.47906e-05 1.47906e-05 1e-06" />
+        <!-- <inertial pos="0 0 0.096608" mass="0.009801" diaginertia="1.47906e-05 1.47906e-05 1e-06" /> -->
         <joint name="joint1" pos="0 0 0" axis="1 0 0" damping="1.79057e-05" />
         <geom size="0.005 0.0645" pos="0 0 0.0645" type="cylinder" rgba="0.8 0.8 0.8 1" />
       </body>
