@@ -48,7 +48,11 @@ class FurataPendulumSim:
 
         if self.control_k is not None:
             # Calculate the control input
-            u = - (self.control_k @ x) # u = -Kx
+            u = 0
+            if abs(x[0]) < 0.2: # If we are close to the top, we can use the linearized control
+                u =  -(self.control_k @ x) # u = -Kx
+            else: # Fallen over
+                u = 0 # TODO: Swing up control here
             data.ctrl[0] = u
 
     def simulate(self, duration=5, framerate=60, initial_state=None):
@@ -130,19 +134,20 @@ if __name__ == '__main__':
     }
 
     control_k = np.array([
-        0.01, 0.5, 0, 0.01
+        0.066, 2.299, 0.656, 18.894
     ])
 
     sim = FurataPendulumSim(constant_values, control_k)
 
+    initial_state = [0, 0, 0, 0.1]
     duration = 5
 
     print("Testing interactive sim")
-    sim.launch_interactive_sim(duration=30)
+    sim.launch_interactive_sim(duration=duration, initial_state=initial_state)
 
     print("Testing non interactive simulation")
     
-    frames, x_hist, u_hist = sim.simulate(duration=duration, initial_state=[0, 0, 0, 0.3])
+    frames, x_hist, u_hist = sim.simulate(duration=duration, initial_state=initial_state)
 
     try:
         media.write_video("./sim.mp4",frames, fps=60)

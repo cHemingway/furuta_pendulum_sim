@@ -4,3 +4,4 @@ __pycache__
 
 # Outputs
 *.mp4
+MUJOCO_LOG.TXT
