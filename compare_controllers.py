@@ -75,15 +75,19 @@ def compare_estimators(out):
     estimators = {
         "Kalman filter": dict(estimator="kalman"),
         "Differentiated angles, 15 Hz low-pass": dict(estimator="diff", diff_cutoff_hz=15),
+        "Kalman + arm disturbance state": dict(
+            estimator="disturbance", dist_est=bd.design_disturbance_kalman(1 / bd.CONTROL_HZ)),
     }
-    fig, ax = plt.subplots(3, 1, sharex=True, figsize=(10, 7), layout="constrained")
-    for (name, kw), colour in zip(estimators.items(), ("C2", "C4")):
+    fig, ax = plt.subplots(4, 1, sharex=True, figsize=(10, 9), layout="constrained")
+    for (name, kw), colour in zip(estimators.items(), ("C2", "C4", "C1")):
         h = bd.simulate(model, K, Ad, Bd, C, M, render=False, **kw)[1]
         t, x, xh, u = h["t"], h["x"], h["x_hat"], h["u"]
         err = np.degrees(np.sqrt(np.mean((xh[t > 4, 3] - x[t > 4, 3]) ** 2)))
         print(f"[estimator] {name}: max pendulum {np.degrees(np.abs(x[:, 1])).max():.1f} deg, "
               f"V rms (t>4 s) {u[t > 4].std():.3f} V, pendulum velocity estimate error rms {err:.1f} deg/s")
+        print(f"[estimator] {name}: arm range (t>4 s) {np.degrees(np.ptp(x[t > 4, 0])):.1f} deg")
         ax[0].plot(t, np.degrees(x[:, 1]), color=colour, label=name)
+        ax[3].plot(t, np.degrees(x[:, 0]), color=colour, label=name)
         ax[1].plot(t, np.degrees(xh[:, 3]), color=colour, lw=0.8, label=f"{name} (estimate, {err:.0f} deg/s rms error)")
         ax[2].plot(t, u, color=colour, lw=0.8, label=name)
     ax[1].plot(t, np.degrees(x[:, 3]), "k", lw=0.8, label="true")
@@ -91,7 +95,8 @@ def compare_estimators(out):
     ax[1].set_ylabel("Pendulum $\\dot\\theta_2$ (deg/s)")
     ax[1].set_ylim(-150, 150)
     ax[2].set_ylabel("Motor voltage (V)")
-    ax[2].set_xlabel("Time (s)")
+    ax[3].set_ylabel("Arm $\\theta_1$ (deg)")
+    ax[3].set_xlabel("Time (s)")
     for a in ax:
         a.axvspan(1.0, 1.05, color="red", alpha=0.15)
         a.legend(fontsize=8, loc="upper right")

@@ -14,7 +14,8 @@ annotated notebook for the reasoning):
 Non-idealities simulated:
   - Controller runs at CONTROL_HZ with zero-order hold on the voltage.
   - Encoders: quantised angles plus Gaussian noise; velocities are not measured.
-  - State is estimated with a steady-state Kalman filter (angles -> full state).
+  - State is estimated with a steady-state Kalman filter (angles -> full state),
+    augmented with an arm torque disturbance that the controller cancels.
   - Motor cogging torque, periodic in theta_1.
 
 Usage: MUJOCO_GL=egl uv run python balance_demo.py [output_dir]
@@ -155,6 +156,42 @@ def design_kalman(Ad, Bd):
     return C, M
 
 
+def pendulum_torque_column():
+    """Continuous B column for a torque [N m] on the pendulum joint (tau_2 in the paper)."""
+    den = J_0_hat * J_2_hat - m_2**2 * L_1**2 * l_2**2
+    return np.array([[0], [0], [m_2 * L_1 * l_2 / den], [J_0_hat / den]])
+
+
+def design_disturbance_kalman(dt, q_arm=0.03, q_pend=None):
+    """Kalman filter on the state augmented with slowly varying torque disturbances.
+
+    z = [x, d_arm (volts-equivalent), d_pend (N m, optional)], with
+        x[k+1] = Ad x + Bd (u + d_arm) + Bp d_pend,   d[k+1] = d + noise.
+    d_arm captures cogging/friction/mismatch at the motor; the controller cancels it
+    with u = -K x_hat - d_arm_hat, which acts like integral action on the arm.
+    d_pend captures pushes on the pendulum. It can't be cancelled (no actuator
+    there) but stops them corrupting the velocity estimates.
+    q_arm [V] and q_pend [N m] are per-step random-walk standard deviations.
+    q_arm = 0.03 was picked by sweep: smaller values lose the pendulum when J_1 is
+    4x off; larger ones limit-cycle. A d_pend state didn't help: a 50 ms push is only
+    5 samples, too short to estimate, and raising q_pend ruins the velocity estimate.
+    """
+    A, B = linear_model()
+    cols = [B] if q_pend is None else [B, pendulum_torque_column()]
+    sys_d = control.c2d(control.ss(A, np.hstack(cols), np.eye(4), 0), dt, method="zoh")
+    Ad, Bd_all = np.asarray(sys_d.A), np.asarray(sys_d.B)
+    n_d = Bd_all.shape[1]
+    Az = np.block([[Ad, Bd_all], [np.zeros((n_d, 4)), np.eye(n_d)]])
+    Bz = np.r_[Bd_all[:, :1], np.zeros((n_d, 1))]
+    Cz = np.hstack([np.eye(2, 4), np.zeros((2, n_d))])
+    q_d = [q_arm] if q_pend is None else [q_arm, q_pend]
+    Qn = np.diag([1e-9, 1e-9, 1e-3, 1e-3] + [q**2 for q in q_d])
+    Rn = np.diag(encoder_variance())
+    P = solve_discrete_are(Az.T, Cz.T, Qn, Rn)
+    Mz = P @ Cz.T @ np.linalg.inv(Cz @ P @ Cz.T + Rn)
+    return dict(Az=Az, Bz=Bz[:, 0], Cz=Cz, Mz=Mz)
+
+
 def read_encoders(data, rng):
     """Quantised, noisy angle measurements [theta_1, theta_2]."""
     lsb = 2 * np.pi / 2.0 ** np.array(ENC_BITS)
@@ -164,7 +201,7 @@ def read_encoders(data, rng):
 
 def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
              push_force=0.035, fps=60, width=1280, height=720, seed=0, render=True, full_state=False,
-             estimator="kalman", diff_cutoff_hz=None):
+             estimator="kalman", diff_cutoff_hz=None, dist_est=None):
     rng = np.random.default_rng(seed)
     data = mujoco.MjData(model)
     arm1 = model.body("arm1").id
@@ -176,9 +213,12 @@ def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
     hist["y"] = np.zeros((steps, 2))
     hist["u"] = np.zeros(steps)
     hist["t"] = np.zeros(steps)
+    hist["d_hat"] = np.zeros(steps)
     frames = []
 
     x_hat = np.zeros(4)
+    d_hat = 0.0  # estimated arm disturbance [V], cancelled by the controller
+    z = None if dist_est is None else np.zeros(dist_est["Az"].shape[0])
     y_prev = np.zeros(2)
     dt_ctrl = ctrl_every * model.opt.timestep
     u = 0.0
@@ -202,6 +242,10 @@ def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
                 if estimator == "kalman":
                     x_pred = Ad @ x_hat + Bd[:, 0] * u
                     x_hat = x_pred + M @ (y - C @ x_pred)
+                elif estimator == "disturbance":
+                    z_pred = dist_est["Az"] @ z + dist_est["Bz"] * u
+                    z = z_pred + dist_est["Mz"] @ (y - dist_est["Cz"] @ z_pred)
+                    x_hat, d_hat = z[:4], z[4]
                 else:  # "diff": backward-difference velocities, optional first-order low-pass
                     vel = (y - y_prev) / dt_ctrl
                     if diff_cutoff_hz is not None:
@@ -212,7 +256,7 @@ def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
                 if full_state:  # ideal sensing: controller sees the true state
                     x_hat = np.r_[data.qpos[:2], data.qvel[:2]]
                 fallen = abs(x_hat[1]) > 0.5  # pendulum angle, not arm angle
-                u = 0.0 if fallen else float(np.clip(-K @ x_hat, -V_max, V_max))
+                u = 0.0 if fallen else float(np.clip(-K @ x_hat - d_hat, -V_max, V_max))
                 data.ctrl[0] = u
 
             # Disturbances: motor cogging, plus a push on the pendulum tip
@@ -228,6 +272,7 @@ def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
             hist["x_hat"][i] = x_hat
             hist["y"][i] = y
             hist["u"][i] = u
+            hist["d_hat"][i] = d_hat
             mujoco.mj_step(model, data)
 
             if render and len(frames) < data.time * fps:
@@ -277,11 +322,13 @@ if __name__ == "__main__":
     Ad, Bd = discretise(A, B, dt)
     K, poles = design_lqr(Ad, Bd)
     C, M = design_kalman(Ad, Bd)
+    dist_est = design_disturbance_kalman(dt)
     print("K (V per [rad, rad, rad/s, rad/s]):", K)
     print("Closed-loop poles (z):", poles, "-> |z| max", np.abs(poles).max())
-    print("Estimator poles (z):", np.linalg.eigvals((np.eye(4) - M @ C) @ Ad))
+    print("Estimator poles (z):", np.linalg.eigvals(
+        (np.eye(len(dist_est["Az"])) - dist_est["Mz"] @ dist_est["Cz"]) @ dist_est["Az"]))
 
-    frames, h = simulate(model, K, Ad, Bd, C, M)
+    frames, h = simulate(model, K, Ad, Bd, C, M, estimator="disturbance", dist_est=dist_est)
     media.write_video(f"{out}/balance_demo.mp4", frames, fps=60)
     x, t, u = h["x"], h["t"], h["u"]
     settled = t > 4
@@ -304,7 +351,9 @@ if __name__ == "__main__":
     ax[1].plot(t, np.degrees(h["x_hat"][:, 1]), "--", label=r"$\hat\theta_2$ estimate")
     ax[1].set_ylabel("Pendulum (deg)")
     ax[1].legend(loc="upper right")
-    ax[2].plot(t, u)
+    ax[2].plot(t, u, label="applied")
+    ax[2].plot(t, h["d_hat"], "--", label=r"$\hat d$ estimated arm disturbance")
+    ax[2].legend(loc="upper right")
     ax[2].set_ylabel("Motor voltage (V)")
     ax[2].set_xlabel("Time (s)")
     fig.savefig(f"{out}/balance_demo.png", dpi=110)
