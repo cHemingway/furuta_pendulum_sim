@@ -654,7 +654,14 @@ So voltage gains are $K_V = 82.1\,K_\tau$. The code uses $2.61\,K_\tau$, which i
 
 Back-EMF isn't small either, because the arm flicks fast: $\tau_1 = (K_t/R)V - (K_t^2/R)\dot\theta_1$. That's an extra damping of 8.3×10⁻⁴ N m s/rad on $\theta_1$. Model it directly in volts: add $K_t^2/R$ to $b_1$ and scale `B[:, 0]` by $K_t/R$. LQR then gives volt gains directly.
 
-*These numbers use $R$ and $K_v$ as given in this cell; they're not checked against the datasheet. To verify, measure $R$ with a multimeter. For $K_t$, spin the motor at a known speed and read the open-circuit voltage: $K_e = V/\omega$, which equals $K_t$ in SI units.*
+**Checked against the iFlight GM3506 spec sheet:**
+
+- $R$ = 5.6 Ω ±5% ✓
+- $K_v$ isn't listed, but the no-load figures (2149–2375 RPM at 16 V) give ≈134–148 RPM/V. Your 140 is consistent.
+- The quoted load torque is 600–1000 g·cm (0.059–0.098 N m) at 1 A, which implies $K_t$ ≈ 0.06–0.10 N m/A. That agrees with $1/K_v$ = 0.068.
+- Stall at 12 V: 2.1 A × 0.068 ≈ 0.15 N m, which is ~26 W. That's right at the ≤25 W rating, and as the coils heat, $R$ rises and torque falls.
+
+*Caveat:* the 5.6 Ω is probably terminal-to-terminal. If your driver's "voltage" is a per-phase FOC quantity (e.g. SimpleFOC's $U_q$), the volts→torque factor can be off by up to ~2×. Measure it to be sure: hold the arm on a scale at a known lever length and command a few voltages.
 """), kind="danger")
     return
 
