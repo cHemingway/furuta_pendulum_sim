@@ -26,47 +26,30 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.callout(mo.md(r"""
-## ⚠ Review: why the controller didn't work
+## ⚠ Review summary
 
-The red boxes below each cell explain the problem there. Issues are ranked by impact.
+Details are in the red boxes under each cell.
 
-**Model and controller errors (these break the controller):**
+**Model and controller errors**
 
-1. **The controller balances with a motor that doesn't exist.** LQR and pole placement use both $\tau_1$ (motor) and $\tau_2$ (pendulum disturbance). The $\tau_2$ row of $K$ does almost all the balancing. With only the $\tau_1$ row, the closed loop has a pole at **+20.8 rad/s**, so the pendulum falls in ~50 ms.
-2. **$A_{42}$ uses $L_2$ instead of $l_2$.** Gravity on the pendulum is overstated by 2.1×.
-3. **The torque→voltage conversion is wrong.** It should be $R/K_t = 82.1$, not 2.61, so the hardware gains are ~31× too small. Back-EMF damping is also missing.
-4. **$J_1 = 5.3\times10^{-4}$ kg m² is ~20–50× too big** for a 20 g arm.
-5. **$b_1, b_2 = 0.85$ is the ringdown decay rate $q$ [1/s], not a damping coefficient $b$** [N m s/rad]. They're unused anyway, because $A_{33}..A_{44} = 0$.
+1. The controller relies on $\tau_2$, a pendulum-joint torque that can't be applied
+2. $A_{42}$ uses $L_2$ instead of $l_2$
+3. The torque→voltage conversion is wrong (~31× too small)
+4. $J_1$ is ~20–50× too big
+5. The damping values have the wrong units, and are unused
 
-**Plot and sim bugs** (these hid issue 1, because no plot ever showed the real closed loop):
+**Plot and sim bugs**
 
-6. Initial states use $\theta_2=\pi$, but the linear model is upright at $\theta_2 = 0$.
-7. `np.linalg.eig` returns `(eigenvalues, eigenvectors)`, not `(T, D)`.
-8. The discrete sim overwrites $x(0)$ with zeros on the first iteration.
-9. Controllability is checked with both inputs, which proves nothing.
-10. Pole placement has the same $\tau_2$ problem, and its poles are very slow.
-11. The "closed loop" plot is actually the open-loop plant.
-12. The last cell labels the $\tau_1$ output as $\dot\theta_1$.
+6. Initial states use $\theta_2=\pi$, but upright is 0
+7. `np.linalg.eig` outputs are swapped
+8. The discrete sim is all zeros
+9. The controllability check uses both inputs
+10. Pole placement has the same $\tau_2$ problem
+11. The "closed loop" plot is actually open loop
+12. The final gains cell is mislabelled
 
-**Related problems in `mujoco_sim.py`:**
-
-- `abs(x[0]) < 0.2` tests the **arm** angle $\theta_1$, not the pendulum angle $\theta_2$, so control switches off once the arm moves 11°.
-- The MuJoCo geometry doesn't match these constants:
-    - The pendulum pivot is at 93.5 mm in the XML, not $L_1$ = 38.4 mm.
-    - `geom.size[1]` is the cylinder **half**-length, so the rods come out 2× too long.
-    - The pendulum CoM is at 64.5 mm, not $l_2$ = 32.8 mm.
-    - `body.mass` is ignored, because MuJoCo uses geom density. The arms are actually 6.0 g and 11.0 g.
-    - The motor rotor inertia is missing (add it as joint `armature`).
-- `control_k = [0.066, 2.299, 0.656, 18.894]` is unstable on MuJoCo's own linearisation (pole at +1.87 rad/s).
+**Also:** `mujoco_sim.py` has problems of its own (see the end of the notebook)
 """), kind="danger")
-    return
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.callout(mo.md(r"""
-**What checks out:** With issue 2 fixed and MuJoCo's real geometry plugged in, this paper's $A$ and $B$ match `mujoco.mjd_transitionFD` within ~1%, with the same signs. A $\tau_1$-only LQR designed on that model balanced the MuJoCo pendulum from $\theta_2 = 0.05$ rad, with peak torque 0.125 N m.
-"""), kind="success")
     return
 
 
@@ -670,6 +653,8 @@ def _(mo):
 So voltage gains are $K_V = 82.1\,K_\tau$. The code uses $2.61\,K_\tau$, which is **~31× too small**. That alone explains the hardware failing.
 
 Back-EMF isn't small either, because the arm flicks fast: $\tau_1 = (K_t/R)V - (K_t^2/R)\dot\theta_1$. That's an extra damping of 8.3×10⁻⁴ N m s/rad on $\theta_1$. Model it directly in volts: add $K_t^2/R$ to $b_1$ and scale `B[:, 0]` by $K_t/R$. LQR then gives volt gains directly.
+
+*These numbers use $R$ and $K_v$ as given in this cell; they're not checked against the datasheet. To verify, measure $R$ with a multimeter. For $K_t$, spin the motor at a known speed and read the open-circuit voltage: $K_e = V/\omega$, which equals $K_t$ in SI units.*
 """), kind="danger")
     return
 
@@ -774,6 +759,31 @@ def _(mo):
     mo.callout(mo.md(r"""
 **Minor:** For complex arrays, `str()` prints `1.+2.j`, which isn't valid LaTeX. Handle complex values with `a.real` and `a.imag`. (Also, "Furata" → "Furuta" throughout.)
 """), kind="warn")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+## ⚠ Problems in `mujoco_sim.py`
+
+- `abs(x[0]) < 0.2` tests the **arm** angle $\theta_1$, not the pendulum angle $\theta_2$, so control switches off once the arm moves 11°.
+- The MuJoCo geometry doesn't match these constants:
+    - The pendulum pivot is at 93.5 mm in the XML, not $L_1$ = 38.4 mm.
+    - `geom.size[1]` is the cylinder **half**-length, so the rods come out 2× too long.
+    - The pendulum CoM is at 64.5 mm, not $l_2$ = 32.8 mm.
+    - `body.mass` is ignored, because MuJoCo uses geom density. The arms are actually 6.0 g and 11.0 g.
+    - The motor rotor inertia is missing (add it as joint `armature`).
+- `control_k = [0.066, 2.299, 0.656, 18.894]` is unstable on MuJoCo's own linearisation (pole at +1.87 rad/s).
+"""), kind="danger")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**What checks out:** With issue 2 fixed and MuJoCo's real geometry plugged in, this paper's $A$ and $B$ match `mujoco.mjd_transitionFD` within ~1%, with the same signs. A $\tau_1$-only LQR designed on that model balanced the MuJoCo pendulum from $\theta_2 = 0.05$ rad, with peak torque 0.125 N m.
+"""), kind="success")
     return
 
 
