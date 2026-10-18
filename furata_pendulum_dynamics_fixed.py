@@ -607,7 +607,7 @@ def _(mo):
         - quantised, noisy encoders, as above
         - a 0.035 N push on the pendulum tip for 50 ms at $t = 1$ s
 
-        `balance_demo.py` and `compare_controllers.py` run the same comparison in MuJoCo, with the full nonlinear dynamics.
+        `balance_demo.py` runs the disturbance-state filter in MuJoCo, with the full nonlinear dynamics.
         """
     )
     return
