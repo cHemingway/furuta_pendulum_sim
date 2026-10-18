@@ -6,6 +6,7 @@ A project to simulate a furuta pendulum and design a controller for it, to teach
 - [furata_pendulum_dynamics.py](furata_pendulum_dynamics.py) - General grab bag of linear model and controller. In [marimo](https://marimo.io/) format
 - [pendulum_damping.py](pendulum_damping.py) - Attempt to measure damping of pendulum axis via measuring ringdown.
 - [mujoco_sim.py] - Simulate our actual controller using MuCoJo.  
+- [balance_demo.py](balance_demo.py) - Corrected model + motor-only LQR (in volts), balanced in MuJoCo with a push at t=1 s. Renders `balance_demo.mp4`. Run with `MUJOCO_GL=egl` when headless.
 
 
 ### Install / dependencies
