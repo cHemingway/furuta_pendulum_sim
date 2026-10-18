@@ -163,7 +163,8 @@ def read_encoders(data, rng):
 
 
 def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
-             push_force=0.035, fps=60, width=1280, height=720, seed=0, render=True, full_state=False):
+             push_force=0.035, fps=60, width=1280, height=720, seed=0, render=True, full_state=False,
+             estimator="kalman", diff_cutoff_hz=None):
     rng = np.random.default_rng(seed)
     data = mujoco.MjData(model)
     arm1 = model.body("arm1").id
@@ -178,6 +179,8 @@ def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
     frames = []
 
     x_hat = np.zeros(4)
+    y_prev = np.zeros(2)
+    dt_ctrl = ctrl_every * model.opt.timestep
     u = 0.0
     y = np.zeros(2)
 
@@ -196,8 +199,16 @@ def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
             # Controller: runs at CONTROL_HZ, sees only quantised noisy angles
             if i % ctrl_every == 0:
                 y = read_encoders(data, rng)
-                x_pred = Ad @ x_hat + Bd[:, 0] * u
-                x_hat = x_pred + M @ (y - C @ x_pred)
+                if estimator == "kalman":
+                    x_pred = Ad @ x_hat + Bd[:, 0] * u
+                    x_hat = x_pred + M @ (y - C @ x_pred)
+                else:  # "diff": backward-difference velocities, optional first-order low-pass
+                    vel = (y - y_prev) / dt_ctrl
+                    if diff_cutoff_hz is not None:
+                        alpha = 1 - np.exp(-2 * np.pi * diff_cutoff_hz * dt_ctrl)
+                        vel = x_hat[2:] + alpha * (vel - x_hat[2:])
+                    x_hat = np.r_[y, vel]
+                y_prev = y
                 if full_state:  # ideal sensing: controller sees the true state
                     x_hat = np.r_[data.qpos[:2], data.qvel[:2]]
                 fallen = abs(x_hat[1]) > 0.5  # pendulum angle, not arm angle

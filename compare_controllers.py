@@ -63,6 +63,42 @@ def run(K, ideal):
     return h
 
 
+def compare_estimators(out):
+    """Kalman filter vs differentiating the encoder angles, realistic conditions, 100 Hz discrete LQR."""
+    from matplotlib import pyplot as plt
+    configure(False)
+    model = mujoco.MjModel.from_xml_string(bd.mujoco_xml())
+    A, B = bd.linear_model()
+    Ad, Bd = bd.discretise(A, B, 1 / bd.CONTROL_HZ)
+    C, M = bd.design_kalman(Ad, Bd)
+    K = fixed_notebook_gains(1 / bd.CONTROL_HZ)
+    estimators = {
+        "Kalman filter": dict(estimator="kalman"),
+        "Differentiated angles, 15 Hz low-pass": dict(estimator="diff", diff_cutoff_hz=15),
+    }
+    fig, ax = plt.subplots(3, 1, sharex=True, figsize=(10, 7), layout="constrained")
+    for (name, kw), colour in zip(estimators.items(), ("C2", "C4")):
+        h = bd.simulate(model, K, Ad, Bd, C, M, render=False, **kw)[1]
+        t, x, xh, u = h["t"], h["x"], h["x_hat"], h["u"]
+        err = np.degrees(np.sqrt(np.mean((xh[t > 4, 3] - x[t > 4, 3]) ** 2)))
+        print(f"[estimator] {name}: max pendulum {np.degrees(np.abs(x[:, 1])).max():.1f} deg, "
+              f"V rms (t>4 s) {u[t > 4].std():.3f} V, pendulum velocity estimate error rms {err:.1f} deg/s")
+        ax[0].plot(t, np.degrees(x[:, 1]), color=colour, label=name)
+        ax[1].plot(t, np.degrees(xh[:, 3]), color=colour, lw=0.8, label=f"{name} (estimate, {err:.0f} deg/s rms error)")
+        ax[2].plot(t, u, color=colour, lw=0.8, label=name)
+    ax[1].plot(t, np.degrees(x[:, 3]), "k", lw=0.8, label="true")
+    ax[0].set_ylabel("Pendulum $\\theta_2$ (deg)")
+    ax[1].set_ylabel("Pendulum $\\dot\\theta_2$ (deg/s)")
+    ax[1].set_ylim(-150, 150)
+    ax[2].set_ylabel("Motor voltage (V)")
+    ax[2].set_xlabel("Time (s)")
+    for a in ax:
+        a.axvspan(1.0, 1.05, color="red", alpha=0.15)
+        a.legend(fontsize=8, loc="upper right")
+    fig.suptitle("Velocity estimation at 100 Hz with noisy 14/12-bit encoders and cogging")
+    fig.savefig(f"{out}/compare_estimators.png", dpi=110)
+
+
 def controllers(ideal):
     rate = 1000 if ideal else 100
     return {
@@ -115,3 +151,5 @@ if __name__ == "__main__":
         a.set_xlabel("Time (s)")
     fig.suptitle("Same push on the pendulum tip at t = 1 s (red band). x = fell over")
     fig.savefig(f"{out}/compare_controllers.png", dpi=110)
+
+    compare_estimators(out)
