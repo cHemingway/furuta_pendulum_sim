@@ -33,6 +33,7 @@ def _(mo):
     5. The damping coefficients are in the right units ($b_2 = q\hat J_2$), and the damping terms are kept in $A$.
     6. The plotting and simulation bugs are fixed. Initial states are near upright ($\theta_2 \approx 0$).
     7. $R$ for LQR comes from the motor's voltage limit (Bryson's rule), and the controller is **discretised for the 100 Hz loop**.
+    8. A **Kalman filter with an arm disturbance state** estimates the velocities from the encoder angles, and cancels cogging.
 
     Values marked *estimate* still need measuring.
     """), kind="success")
@@ -475,6 +476,191 @@ def _(A_sub, B_sub, K_lqr, Q, R, control, f_control, mo, np, np_to_latex):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.md(
+        r"""
+        ## State estimation
+
+        $V = -K_d x$ needs the whole state, but the encoders only measure the two **angles**, and with limited resolution:
+        14-bit on the motor, and 12-bit on the pendulum (`pendulum_ringdown.csv` steps in $2\pi/4096$). At 100 Hz, one
+        pendulum count per sample is already $0.088°/0.01\,\text{s} \approx 9°/\text{s}$ of velocity, so just differentiating the
+        angles gives noisy velocities.
+
+        A **Kalman filter** uses the model instead. Each cycle it predicts the state from the last estimate and the voltage it
+        applied, then corrects the prediction with the measured angles:
+
+        $$\hat x^- = A_d \hat x + B_d u, \qquad \hat x = \hat x^- + M\,(y - C\hat x^-), \qquad y = [\theta_1, \theta_2]$$
+
+        The steady-state gain $M$ comes from the discrete Riccati equation. Its inputs are the measurement noise covariance (from the
+        encoders) and a process noise covariance, which is a tuning knob for how much to trust the model.
+
+        ### Adding a disturbance state
+
+        The motor's **cogging** torque (and friction, and any error in $J_1$) acts like an unknown, slowly changing extra
+        voltage $d$ at the motor. If we add it to the state as a random walk,
+
+        $$\begin{bmatrix} x \\ d \end{bmatrix}_{k+1} = \begin{bmatrix} A_d & B_d \\ 0 & 1 \end{bmatrix}\begin{bmatrix} x \\ d \end{bmatrix}_k + \begin{bmatrix} B_d \\ 0 \end{bmatrix} u_k,$$
+
+        the filter estimates $\hat d$, and the controller cancels it with $V = -K_d\hat x - \hat d$. That acts like **integral
+        action** on the arm, so the arm stops resting wherever a cogging detent holds it.
+        """
+    )
+    return
+
+
+@app.cell
+def _(B_d, K_t, R_m, constant_values, np, solve_discrete_are):
+    # Sensor model
+    enc_bits = np.array([14, 12])                # motor, pendulum
+    enc_noise = np.radians([0.02, 0.05])         # 1-sigma noise on top of quantisation. ESTIMATE
+    enc_lsb = 2 * np.pi / 2.0**enc_bits
+    R_n = np.diag(enc_noise**2 + enc_lsb**2 / 12)  # measurement noise covariance
+    C_meas = np.eye(2, 4)                        # we measure theta_1, theta_2
+
+    KtR = float((K_t / R_m).subs(constant_values))  # N m per volt
+
+    def kalman_gain(Az, Cz, Qn, Rn):
+        """Steady-state gain M for x_hat = x_pred + M (y - C x_pred)."""
+        P = solve_discrete_are(Az.T, Cz.T, Qn, Rn)  # prior covariance
+        return P @ Cz.T @ np.linalg.inv(Cz @ P @ Cz.T + Rn)
+
+    # Plain Kalman filter. Process noise: 0.5 mN m of unmodelled torque at the motor, plus
+    # some on the velocities. (Setting it equal to the full cogging amplitude puts an
+    # estimator pole near z = -1 and makes the voltage chatter.)
+    Q_n = B_d @ B_d.T * (0.5e-3 / KtR) ** 2 + np.diag([1e-9, 1e-9, 1e-3, 1e-3])
+    return C_meas, KtR, Q_n, R_n, enc_bits, enc_lsb, enc_noise, kalman_gain
+
+
+@app.cell
+def _(A_d, B_d, C_meas, Q_n, R_n, kalman_gain, mo, np, np_to_latex):
+    M_kf = kalman_gain(A_d, C_meas, Q_n, R_n)
+
+    # Augmented with an arm disturbance d (volts-equivalent), modelled as a random walk.
+    # q_d = 0.03 V per step was picked by sweep in MuJoCo: smaller values lost the pendulum
+    # when J_1 was 4x off; larger ones (0.3) caused a large limit cycle.
+    q_d = 0.03
+    A_z = np.block([[A_d, B_d], [np.zeros((1, 4)), np.eye(1)]])
+    B_z = np.r_[B_d, np.zeros((1, 1))]
+    C_z = np.hstack([C_meas, np.zeros((2, 1))])
+    Q_z = np.diag([1e-9, 1e-9, 1e-3, 1e-3, q_d**2])
+    M_z = kalman_gain(A_z, C_z, Q_z, R_n)
+
+    _p_kf = np.linalg.eigvals((np.eye(4) - M_kf @ C_meas) @ A_d)
+    _p_z = np.linalg.eigvals((np.eye(5) - M_z @ C_z) @ A_z)
+    mo.md(f"""
+    Kalman gain $M = {np_to_latex(M_kf, dp=3)}$, estimator poles ${np_to_latex(_p_kf[None, :], dp=2)}$
+
+    With disturbance state: estimator poles ${np_to_latex(_p_z[None, :], dp=2)}$
+
+    All poles have $|z| < 1$, and none is near $-1$ (that would make the estimate flip sign every sample).
+    """)
+    return A_z, B_z, C_z, M_kf, M_z, Q_z, q_d
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(
+        r"""
+        ### Compare the estimators
+
+        A linear simulation of the plant at 1 kHz, with the 100 Hz controller $K_d$ fed by each estimator. The simulation includes:
+
+        - GM3506 cogging: 264 cycles per revolution, 2 mN m amplitude (*estimate*)
+        - quantised, noisy encoders, as above
+        - a 0.035 N push on the pendulum tip for 50 ms at $t = 1$ s
+
+        `balance_demo.py` and `compare_controllers.py` run the same comparison in MuJoCo, with the full nonlinear dynamics.
+        """
+    )
+    return
+
+
+@app.cell
+def _(A_sub, B, B_sub, K_d, KtR, M_kf, M_z, A_d, B_d, A_z, B_z, C_meas, C_z, constant_values, control, dt, enc_lsb, enc_noise, np, sympy):
+    def simulate_estimators(duration=8.0, sub_dt=1e-3, seed=0):
+        B_tau = sympy.matrix2numpy(B.subs(constant_values), dtype=float)  # torque columns: [arm, pendulum]
+        _sys = control.c2d(control.ss(A_sub, np.hstack([B_sub, B_tau]), np.eye(4), 0), sub_dt, method="zoh")
+        Ap, Bp = np.asarray(_sys.A), np.asarray(_sys.B)  # plant at 1 kHz: inputs [V, tau_arm, tau_pend]
+        n_sub = int(round(dt / sub_dt))
+        steps = int(round(duration / sub_dt))
+        L_2 = 0.0703
+        cog_amp, cog_periods = 2e-3, 264
+        results = {}
+        for name in ("Differentiated angles (15 Hz low-pass)", "Kalman filter", "Kalman + disturbance state"):
+            rng = np.random.default_rng(seed)
+            x = np.zeros(4)
+            x_hat = np.zeros(4)
+            z = np.zeros(5)
+            y_prev = np.zeros(2)
+            u = 0.0
+            d_hat = 0.0
+            hist = np.zeros((steps, 6))
+            for i in range(steps):
+                t = i * sub_dt
+                if i % n_sub == 0:
+                    y = np.round((x[:2] + rng.normal(0, enc_noise)) / enc_lsb) * enc_lsb
+                    if name.startswith("Differentiated"):
+                        alpha = 1 - np.exp(-2 * np.pi * 15 * dt)
+                        x_hat = np.r_[y, x_hat[2:] + alpha * ((y - y_prev) / dt - x_hat[2:])]
+                    elif name == "Kalman filter":
+                        x_pred = A_d @ x_hat + B_d[:, 0] * u
+                        x_hat = x_pred + M_kf @ (y - C_meas @ x_pred)
+                    else:
+                        z_pred = A_z @ z + B_z[:, 0] * u
+                        z = z_pred + M_z @ (y - C_z @ z_pred)
+                        x_hat, d_hat = z[:4], z[4]
+                    y_prev = y
+                    u = float(np.clip(-K_d[0] @ x_hat - d_hat, -12, 12))
+                tau_cog = -cog_amp * np.sin(cog_periods * x[0])
+                tau_push = 0.035 * L_2 if 1.0 <= t < 1.05 else 0.0
+                hist[i] = [t, *x[:2], x[3], x_hat[3], u]
+                x = Ap @ x + Bp @ np.array([u, tau_cog, tau_push])
+            results[name] = hist
+        return results
+
+    estimator_runs = simulate_estimators()
+    return estimator_runs, simulate_estimators
+
+
+@app.cell
+def _(estimator_runs, mo, np, plt):
+    _fig, _ax = plt.subplots(3, 1, sharex=True, figsize=(8, 7), layout="constrained")
+    _rows = []
+    for (_name, _h), _c in zip(estimator_runs.items(), ("C4", "C2", "C1")):
+        _t, _th1, _th2, _w2, _w2_hat, _u = _h.T
+        _s = _t > 4
+        _rows.append(
+            f"| {_name} | {np.degrees(np.abs(_th2)).max():.1f}° | {np.degrees(np.ptp(_th1[_s])):.1f}° "
+            f"| {_u[_s].std():.2f} V | {np.degrees(np.sqrt(np.mean((_w2_hat[_s] - _w2[_s])**2))):.0f}°/s |"
+        )
+        _ax[0].plot(_t, np.degrees(_th2), color=_c, label=_name)
+        _ax[1].plot(_t, np.degrees(_th1), color=_c)
+        _ax[2].plot(_t, _u, color=_c, lw=0.7)
+    for _a in _ax:
+        _a.axvspan(1.0, 1.05, color="red", alpha=0.15)
+    _ax[0].set_ylabel(r"Pendulum $\theta_2$ (deg)")
+    _ax[0].legend(fontsize=8)
+    _ax[1].set_ylabel(r"Arm $\theta_1$ (deg)")
+    _ax[2].set_ylabel("Motor voltage (V)")
+    _ax[2].set_xlabel("Time (s)")
+
+    mo.vstack([
+        _fig,
+        mo.md(
+            "| Estimator | Pendulum peak | Arm wander (t > 4 s) | Voltage jitter (rms) | Pendulum velocity error (rms) |\n"
+            "|---|---|---|---|---|\n" + "\n".join(_rows)
+        ),
+        mo.md(
+            "The disturbance state stops the arm wandering between cogging detents, for slightly more voltage jitter. "
+            "Differentiated angles respond fastest to the push and need no model, which makes them more "
+            "robust to an error in $J_1$ (they still worked in MuJoCo with $J_1$ 6× off; both Kalman filters "
+            "fail there). Once $J_1$ and the rotor inertia are measured, use the disturbance-state filter."
+        ),
+    ])
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md("""## Imports and convenience functions""")
     return
 
@@ -486,7 +672,7 @@ def _():
     from sympy import symbols, Eq, diff, Matrix, S, latex
     from sympy.physics.mechanics import dynamicsymbols, mechanics_printing
     from sympy.physics.vector.printing import vlatex
-    from scipy.linalg import expm
+    from scipy.linalg import expm, solve_discrete_are
     import numpy as np
     import control
     from matplotlib import pyplot as plt
@@ -504,6 +690,7 @@ def _():
         mo,
         np,
         plt,
+        solve_discrete_are,
         sympy,
         symbols,
         vlatex,
