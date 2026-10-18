@@ -352,6 +352,45 @@ def _(mo):
     return
 
 
+@app.cell
+def _(A_sub, B_sub, K_t, R_m, constant_values, expm, np, plt):
+    # The gains actually used before, converted to volts per [rad, rad, rad/s, rad/s]
+    _KtR = float((K_t / R_m).subs(constant_values))
+    _original_gains = {
+        # tau_1 row of the original notebook's 2-input LQR, times 2.61 (as used on the hardware)
+        "Original notebook LQR (x2.61)": np.array([99.998, 0.651, 707.092, 6.538]) * 2.61,
+        # mujoco_sim.py control_k, which the sim applied as torque
+        "Original mujoco_sim.py control_k": np.array([0.066, 2.299, 0.656, 18.894]) / _KtR,
+    }
+
+    # Simulate the linear model at 1 kHz from 0.05 rad, with the voltage clipped to the 12 V supply
+    _dt = 1e-3
+    _M = expm(np.block([[A_sub, B_sub], [np.zeros((1, 5))]]) * _dt)  # exact ZOH discretisation
+    _Ad, _Bd = _M[:4, :4], _M[:4, 4]
+
+    _fig, _ax = plt.subplots(figsize=(7, 3), layout="tight")
+    for _name, _K in _original_gains.items():
+        _x = np.array([0, 0.05, 0, 0])
+        _t, _th2 = [], []
+        for _i in range(3000):
+            _t.append(_i * _dt)
+            _th2.append(np.degrees(_x[1]))
+            if abs(_th2[-1]) > 60:  # fallen over; the linear model is meaningless beyond here
+                break
+            _u = np.clip(-_K @ _x, -12, 12)
+            _x = _Ad @ _x + _Bd * _u
+        _eig = np.linalg.eigvals(A_sub - B_sub @ _K[None, :]).real.max()
+        _fell = abs(_th2[-1]) > 60
+        _ax.plot(_t, _th2, label=f"{_name}: max Re(eig) = {_eig:+.1f}, " +
+                 (f"falls in {_t[-1]:.2f} s" if _fell else "has not fallen after 3 s"))
+    _ax.set_xlabel("Time (s)")
+    _ax.set_ylabel(r"Pendulum $\theta_2$ (deg)")
+    _ax.set_title("The original gains, starting 0.05 rad from upright")
+    _ax.legend(fontsize=8)
+    _fig
+    return
+
+
 @app.cell(hide_code=True)
 def _(mo):
     mo.md("""## Make Pole Placement Controller""")

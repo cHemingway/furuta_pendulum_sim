@@ -200,8 +200,8 @@ def read_encoders(data, rng):
 
 
 def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
-             push_force=0.035, fps=60, width=1280, height=720, seed=0, render=True, full_state=False,
-             estimator="kalman", diff_cutoff_hz=None, dist_est=None):
+             push_force=0.035, fps=60, width=1280, height=720, seed=0, render=True,
+             estimator="kalman", dist_est=None):
     rng = np.random.default_rng(seed)
     data = mujoco.MjData(model)
     arm1 = model.body("arm1").id
@@ -219,8 +219,6 @@ def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
     x_hat = np.zeros(4)
     d_hat = 0.0  # estimated arm disturbance [V], cancelled by the controller
     z = None if dist_est is None else np.zeros(dist_est["Az"].shape[0])
-    y_prev = np.zeros(2)
-    dt_ctrl = ctrl_every * model.opt.timestep
     u = 0.0
     y = np.zeros(2)
 
@@ -246,15 +244,6 @@ def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
                     z_pred = dist_est["Az"] @ z + dist_est["Bz"] * u
                     z = z_pred + dist_est["Mz"] @ (y - dist_est["Cz"] @ z_pred)
                     x_hat, d_hat = z[:4], z[4]
-                else:  # "diff": backward-difference velocities, optional first-order low-pass
-                    vel = (y - y_prev) / dt_ctrl
-                    if diff_cutoff_hz is not None:
-                        alpha = 1 - np.exp(-2 * np.pi * diff_cutoff_hz * dt_ctrl)
-                        vel = x_hat[2:] + alpha * (vel - x_hat[2:])
-                    x_hat = np.r_[y, vel]
-                y_prev = y
-                if full_state:  # ideal sensing: controller sees the true state
-                    x_hat = np.r_[data.qpos[:2], data.qvel[:2]]
                 fallen = abs(x_hat[1]) > 0.5  # pendulum angle, not arm angle
                 u = 0.0 if fallen else float(np.clip(-K @ x_hat - d_hat, -V_max, V_max))
                 data.ctrl[0] = u
