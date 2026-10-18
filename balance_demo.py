@@ -163,7 +163,7 @@ def read_encoders(data, rng):
 
 
 def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
-             push_force=0.035, fps=60, width=1280, height=720, seed=0, render=True):
+             push_force=0.035, fps=60, width=1280, height=720, seed=0, render=True, full_state=False):
     rng = np.random.default_rng(seed)
     data = mujoco.MjData(model)
     arm1 = model.body("arm1").id
@@ -198,6 +198,8 @@ def simulate(model, K, Ad, Bd, C, M, duration=8.0, push_time=1.0, push_len=0.05,
                 y = read_encoders(data, rng)
                 x_pred = Ad @ x_hat + Bd[:, 0] * u
                 x_hat = x_pred + M @ (y - C @ x_pred)
+                if full_state:  # ideal sensing: controller sees the true state
+                    x_hat = np.r_[data.qpos[:2], data.qvel[:2]]
                 fallen = abs(x_hat[1]) > 0.5  # pendulum angle, not arm angle
                 u = 0.0 if fallen else float(np.clip(-K @ x_hat, -V_max, V_max))
                 data.ctrl[0] = u
