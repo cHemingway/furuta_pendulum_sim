@@ -1,58 +1,5 @@
-# =============================================================================
-# ANNOTATED REVIEW of furata_pendulum_dynamics.py
-#
-# Search for "# ISSUE" to find each note in the code below. Numbers are ranked
-# by how much each one breaks the controller.
-#
-# Why the controller failed (sim and hardware):
-#   ISSUE 1  The controller is designed with TWO inputs (tau_1 motor, tau_2
-#            pendulum disturbance). The tau_2 row of K does nearly all the
-#            balancing. Without it the closed loop has an unstable pole at
-#            +20.8 rad/s, so the pendulum falls in about 50 ms. There is no
-#            motor on the pendulum joint.
-#   ISSUE 2  A_42 uses L_2 (full pendulum length) instead of l_2 (pivot to
-#            centre of mass). This overstates gravity by 2.1x.
-#   ISSUE 3  The torque->voltage conversion is wrong: it uses 2.61 where it
-#            should use R/K_t = 82.1. Hardware gains end up about 31x too
-#            small, and back-EMF damping is left out.
-#   ISSUE 4  J_1 = 5.3e-4 kg m^2 is about 20-50x too big for a 20 g arm of
-#            ~77 mm (expected ~1e-5 + motor rotor).
-#   ISSUE 5  b1/b2 = 0.85 is the ringdown decay rate q [1/s], not a damping
-#            coefficient b [N m s/rad]. It's unused anyway because A_33..A_44
-#            are zeroed.
-#
-# Bugs in the plots/sims (these hid ISSUE 1, because none of them ever showed
-# the real closed loop):
-#   ISSUE 6  Initial states use theta_2 = pi; the linear model is upright at 0.
-#   ISSUE 7  np.linalg.eig returns (eigenvalues, eigenvectors), not (T, D).
-#   ISSUE 8  Discrete sim overwrites x(0) with zeros on the first iteration.
-#   ISSUE 9  Controllability is checked with both inputs, which proves nothing.
-#   ISSUE 10 Pole placement has the same tau_2 problem; poles are also very slow.
-#   ISSUE 11 The "closed loop" plot is actually the open-loop plant.
-#   ISSUE 12 The last cell labels the tau_1 output as theta_1_dot.
-#
-# Related problems in mujoco_sim.py (also cause the sim to fail):
-#   a) `abs(x[0]) < 0.2` tests the ARM angle theta_1, not the pendulum
-#      theta_2, so control switches off once the arm moves 11 degrees.
-#   b) The MuJoCo geometry doesn't match these constants:
-#        - The pendulum pivot is at 93.5 mm in the XML, not L_1 = 38.4 mm.
-#        - geom size[1] is the cylinder HALF-length, so setting it to L_1/L_2
-#          doubles the rod lengths.
-#        - The pendulum CoM is at 64.5 mm, not l_2 = 32.8 mm.
-#        - body.mass is ignored: MuJoCo derives mass from geom density, so
-#          the arms are actually 6.0 g and 11.0 g.
-#        - Motor rotor inertia isn't modelled (use joint `armature`).
-#   c) control_k = [0.066, 2.299, 0.656, 18.894] is unstable on MuJoCo's own
-#      linearisation (pole at +1.87 rad/s).
-#
-# Checks I ran:
-#   - With ISSUE 2 fixed and MuJoCo's real geometry plugged in, the paper's
-#     A/B match mujoco.mjd_transitionFD within ~1%, with the same signs. So
-#     the paper's equations and the sign convention are fine.
-#   - A tau_1-only LQR designed on that model balances the MuJoCo pendulum
-#     from theta_2 = 0.05 rad. It settles within 5 s, with peak torque
-#     0.125 N m.
-# =============================================================================
+# Annotated copy of furata_pendulum_dynamics.py: review notes are rendered as
+# red callout boxes (mo.callout) under the relevant cells. Run with `marimo edit`.
 import marimo
 
 __generated_with = "0.11.5"
@@ -78,6 +25,53 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.callout(mo.md(r"""
+## ⚠ Review: why the controller didn't work
+
+The red boxes below each cell explain the problem there. Issues are ranked by impact.
+
+**Model and controller errors (these break the controller):**
+
+1. **The controller balances with a motor that doesn't exist.** LQR and pole placement use both $\tau_1$ (motor) and $\tau_2$ (pendulum disturbance). The $\tau_2$ row of $K$ does almost all the balancing. With only the $\tau_1$ row, the closed loop has a pole at **+20.8 rad/s**, so the pendulum falls in ~50 ms.
+2. **$A_{42}$ uses $L_2$ instead of $l_2$.** Gravity on the pendulum is overstated by 2.1×.
+3. **The torque→voltage conversion is wrong.** It should be $R/K_t = 82.1$, not 2.61, so the hardware gains are ~31× too small. Back-EMF damping is also missing.
+4. **$J_1 = 5.3\times10^{-4}$ kg m² is ~20–50× too big** for a 20 g arm.
+5. **$b_1, b_2 = 0.85$ is the ringdown decay rate $q$ [1/s], not a damping coefficient $b$** [N m s/rad]. They're unused anyway, because $A_{33}..A_{44} = 0$.
+
+**Plot and sim bugs** (these hid issue 1, because no plot ever showed the real closed loop):
+
+6. Initial states use $\theta_2=\pi$, but the linear model is upright at $\theta_2 = 0$.
+7. `np.linalg.eig` returns `(eigenvalues, eigenvectors)`, not `(T, D)`.
+8. The discrete sim overwrites $x(0)$ with zeros on the first iteration.
+9. Controllability is checked with both inputs, which proves nothing.
+10. Pole placement has the same $\tau_2$ problem, and its poles are very slow.
+11. The "closed loop" plot is actually the open-loop plant.
+12. The last cell labels the $\tau_1$ output as $\dot\theta_1$.
+
+**Related problems in `mujoco_sim.py`:**
+
+- `abs(x[0]) < 0.2` tests the **arm** angle $\theta_1$, not the pendulum angle $\theta_2$, so control switches off once the arm moves 11°.
+- The MuJoCo geometry doesn't match these constants:
+    - The pendulum pivot is at 93.5 mm in the XML, not $L_1$ = 38.4 mm.
+    - `geom.size[1]` is the cylinder **half**-length, so the rods come out 2× too long.
+    - The pendulum CoM is at 64.5 mm, not $l_2$ = 32.8 mm.
+    - `body.mass` is ignored, because MuJoCo uses geom density. The arms are actually 6.0 g and 11.0 g.
+    - The motor rotor inertia is missing (add it as joint `armature`).
+- `control_k = [0.066, 2.299, 0.656, 18.894]` is unstable on MuJoCo's own linearisation (pole at +1.87 rad/s).
+"""), kind="danger")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**What checks out:** With issue 2 fixed and MuJoCo's real geometry plugged in, this paper's $A$ and $B$ match `mujoco.mjd_transitionFD` within ~1%, with the same signs. A $\tau_1$-only LQR designed on that model balanced the MuJoCo pendulum from $\theta_2 = 0.05$ rad, with peak torque 0.125 N m.
+"""), kind="success")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md("""## Overall state-space model""")
     return
 
@@ -98,7 +92,6 @@ def _(Matrix, S, diff, dynamicsymbols, mo, symbols, vlatex):
         ''' Return the symbolic system for the Furata pendulum, as described in the paper'''
         # First symbols, use dynamicsymbols to get implicit reference to t
 
-        # (Cosmetic: "Furata"/"futara" -> "Furuta" throughout.)
         A31, A32, A33, A34 = symbols('A_31 A_32 A_33 A_34')
         A41, A42, A43, A44 = symbols('A_41 A_42 A_43 A_44')
 
@@ -120,10 +113,7 @@ def _(Matrix, S, diff, dynamicsymbols, mo, symbols, vlatex):
                     [B41, B42]])
 
 
-        # ISSUE 1 (root): tau_2 is a *disturbance* on the pendulum joint, and
-        # you can't command it. Using it here as a model input is fine, but the
-        # controller must be designed with B[:, 0] only (see the LQR cell).
-        u = Matrix([τ_1, τ_2])
+        u = Matrix([τ_1, τ_2])  # ⚠ ISSUE 1 (see red box)
 
         return A, x, x_dot, B, u
 
@@ -154,6 +144,14 @@ def _(Matrix, S, diff, dynamicsymbols, mo, symbols, vlatex):
     # Now we can write out the equation in full
     mo.output.append(mo.md(f"$${vlatex(_x_dot)}= {vlatex(_A)}{vlatex(x)} + {vlatex(_B)}{vlatex(u)}$$"))
     return futara_symbolic_system, t, u, x, θ_1, θ_2, τ_1, τ_2
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 1 (root cause):** $\tau_2$ is a *disturbance* torque on the pendulum joint, and you can't command it. It's fine as a model input, but the controller must be designed with `B[:, :1]` (the motor only). See the LQR section.
+"""), kind="danger")
+    return
 
 
 @app.cell(hide_code=True)
@@ -192,30 +190,10 @@ def _(Eq, mo, symbols):
         l_2: 0.03279,
         L_1: 0.0384, #  From centre to centre in solidworks
         L_2: 0.0703,  # From axis to end face in solidworks
-        J_1: 0.00053, # Rough guess at 10x L2, as solidworks failed to find this OK
-        # ISSUE 4: This is 100x J_2, not 10x. A 20 g rod ~77 mm long has
-        # J about its CoM of m*L^2/12 ~= 1e-5 kg m^2, so 5.3e-4 is 20-50x too
-        # big. The real number should include the GM3506 rotor (~1e-5) and the
-        # hub. J_1 sets how hard the arm is to accelerate, so this error
-        # rescales every tau_1 gain. Measure it, e.g. step the motor
-        # with the pendulum removed and fit J from the acceleration.
+        J_1: 0.00053, # Rough guess at 10x L2, as solidworks failed to find this OK  # ⚠ ISSUE 4 (see red box)
         J_2: 0.0000053,
-        # NOTE: J_2 looks right. Your ringdown in pendulum_damping.py needed
-        # l = 49 mm instead of 32.8 mm. That's because the pendulum is a
-        # compound pendulum, w^2 = m_2 g l_2 / J_2_hat, so its equivalent
-        # length is J_2_hat/(m_2 l_2) = 48.95 mm. The ringdown confirms the
-        # SolidWorks J_2 and l_2.
-        b1: 0.85, # Assume same as measured b2
+        b1: 0.85, # Assume same as measured b2  # ⚠ ISSUE 5 (see red box)
         b2: 0.85 # See pendulum_damping.py for how we measured this
-        # ISSUE 5: 0.85 is q, the decay rate in theta'' = -q theta' - ...,
-        # with units of 1/s. The damping coefficient you need here is
-        # b2 = q * J_2_hat = 0.85 * 1.605e-5 = 1.36e-5 N m s/rad. That also
-        # explains the FIXME in mujoco_sim.py: 1e-5 "works" because it's
-        # roughly the right value.
-        # b1 is not "the same as b2". With voltage drive, the arm is damped
-        # mainly by motor back-EMF, K_t^2/R = 8.3e-4 N m s/rad (see ISSUE 3).
-        # Also, these values are never used, because A_33..A_44 are
-        # hard-coded to 0 below.
     }
 
 
@@ -243,6 +221,24 @@ def _(Eq, mo, symbols):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 4: $J_1$ is far too big.** $5.3\times10^{-4}$ is 100× $J_2$, not 10× as the comment says. A 20 g rod ~77 mm long has $J \approx mL^2/12 \approx 1\times10^{-5}$ kg m² about its CoM. The real value should add the GM3506 rotor (~$1\times10^{-5}$) and hub. $J_1$ sets how hard the arm is to accelerate, so this error rescales every $\tau_1$ gain. Measure it, e.g. step the motor with the pendulum removed and fit $J$ from the acceleration.
+
+**ISSUE 5: these damping values have the wrong units.** 0.85 is $q$ from $\ddot\theta = -q\dot\theta - \dots$, in 1/s. The damping coefficient is $b_2 = q\hat J_2 = 0.85 \times 1.605\times10^{-5} = 1.36\times10^{-5}$ N m s/rad. That explains the FIXME in `mujoco_sim.py`: $1\times10^{-5}$ "works" because it's roughly correct. $b_1$ is not "the same as $b_2$". Under voltage drive, the arm is damped mainly by motor back-EMF, $K_t^2/R = 8.3\times10^{-4}$ N m s/rad (issue 3).
+"""), kind="danger")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**$J_2$ and $l_2$ look right.** The ringdown in `pendulum_damping.py` needed $l$ = 49 mm instead of 32.8 mm. That's because the pendulum is a *compound* pendulum: $\omega^2 = m_2 g l_2/\hat J_2$, so its equivalent length is $\hat J_2/(m_2 l_2)$ = **48.95 mm**. The ringdown confirms the SolidWorks values.
+"""), kind="success")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md("""### Simplified inertia values""")
     return
 
@@ -255,12 +251,17 @@ def _(J_1, J_2, L_1, l_1, l_2, latex, m_1, m_2, mo):
     J_2_hat = J_2 + m_2*l_2**2
     mo.output.append(mo.md(f"Total moment of interia of arm 2 about pivot point: $\\hat{{J_2}} = {latex(J_2_hat)}$"))
 
-    # Formula is correct (J_0_hat = J_1_hat + m_2 L_1^2). The description is
-    # slightly off: this is arm 1 with the pendulum mass lumped at its pivot,
-    # and it holds upright as well as hanging down.
     J_0_hat = J_1 + m_1 * l_1**2 + m_2 * L_1**2
     mo.output.append(mo.md(f"Total moment of interia of arm 1 when arm 2 is hanging down: $\\hat{{J_0}} =  {latex(J_0_hat)}$"))
     return J_0_hat, J_1_hat, J_2_hat
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**Minor:** The formula for $\hat J_0$ is correct, but the description isn't quite. It's arm 1 with the pendulum mass lumped at its pivot, and it holds upright as well as hanging down.
+"""), kind="warn")
+    return
 
 
 @app.cell(hide_code=True)
@@ -273,20 +274,11 @@ def _(mo):
 def _(J_0_hat, J_2_hat, L_1, L_2, Matrix, g, l_2, m_2):
     A_31 = 0
     A_32 = (g*m_2**2 * l_2**2 * L_1) / (J_0_hat * J_2_hat - m_2**2 * L_1**2 * l_2**2)
-    # ISSUE 5: b_1, b_2 are NOT zero (constant_values says 0.85). The paper's
-    # damped terms are (den = J_0_hat*J_2_hat - m_2^2 L_1^2 l_2^2):
-    #   A_33 = -b_1*J_2_hat/den      A_34 = -b_2*m_2*l_2*L_1/den
-    #   A_43 = -b_1*m_2*l_2*L_1/den  A_44 = -b_2*J_0_hat/den
-    # For voltage drive, b_1 should include back-EMF damping K_t^2/R.
-    A_33 = 0 # As friction b_1 = 0, we can simplify
+    A_33 = 0 # As friction b_1 = 0, we can simplify  # ⚠ ISSUE 5 (see red box)
     A_34 = 0 # As friction b_2 = 0, we can simplify
 
     A_41 = 0
-    # ISSUE 2: Should be l_2 (pivot -> CoM, 32.8 mm), not L_2 (full length,
-    # 70.3 mm). Paper: A_42 = g*m_2*l_2*J_0_hat/den. As written, the
-    # unstable pole is +20.9 rad/s instead of +14.3 rad/s.
-    #   A_42 = (g*m_2*l_2*J_0_hat) / (...)
-    A_42 = (g*m_2*L_2*J_0_hat) / (J_0_hat * J_2_hat - m_2**2 * L_1**2 * l_2**2)
+    A_42 = (g*m_2*L_2*J_0_hat) / (J_0_hat * J_2_hat - m_2**2 * L_1**2 * l_2**2)  # ⚠ ISSUE 2: L_2 -> l_2 (see red box)
     A_43 = 0 # As friction b_1 = 0, we can simplify
     A_44 = 0 # As friction b_2 = 0, we can simplify
 
@@ -297,10 +289,8 @@ def _(J_0_hat, J_2_hat, L_1, L_2, Matrix, g, l_2, m_2):
         [A_41, A_42, A_43, A_44]
     ])
 
-    # B entries and signs are correct. With MuJoCo's geometry they match
-    # MuJoCo's linearisation within ~1%: +tau_1 gives +theta_2'' in both.
     # The paper switches the order it lists these between A and B, watch out when comparing
-    B_31 =J_2_hat / (J_0_hat*J_2_hat - m_2**2 * L_1**2 * l_2**2)
+    B_31 = J_2_hat / (J_0_hat*J_2_hat - m_2**2 * L_1**2 * l_2**2)
     B_41 = (m_2 * L_1 * l_2) / (J_0_hat*J_2_hat - m_2**2 * L_1**2 * l_2**2)
     B_32 = (m_2 * L_1 * l_2) / (J_0_hat*J_2_hat - m_2**2 * L_1**2 * l_2**2)
     B_42 = J_0_hat / (J_0_hat*J_2_hat - m_2**2 * L_1**2 * l_2**2)
@@ -334,6 +324,26 @@ def _(J_0_hat, J_2_hat, L_1, L_2, Matrix, g, l_2, m_2):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 2: $A_{42}$ should use $l_2$ (pivot→CoM, 32.8 mm), not $L_2$ (full length, 70.3 mm).** The paper gives $A_{42} = g m_2 l_2 \hat J_0 / \Delta$, where $\Delta = \hat J_0 \hat J_2 - m_2^2L_1^2l_2^2$. As written, the unstable pole is +20.9 rad/s instead of +14.3 rad/s.
+
+**ISSUE 5 (cont.):** $b_1, b_2$ are not zero, so the damped terms should be included:
+$A_{33} = -b_1\hat J_2/\Delta$, $A_{34} = -b_2 m_2 l_2 L_1/\Delta$, $A_{43} = -b_1 m_2 l_2 L_1/\Delta$, $A_{44} = -b_2\hat J_0/\Delta$.
+For voltage drive, $b_1$ should include the back-EMF damping $K_t^2/R$.
+"""), kind="danger")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**$B$ is correct, including signs.** With MuJoCo's geometry it matches MuJoCo's linearisation within ~1%: $+\tau_1$ gives $+\ddot\theta_2$ in both.
+"""), kind="success")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md(
         """
         ## Simulate open loop (no control)
@@ -353,15 +363,8 @@ def _(mo):
 def _(A, constant_values, mo, np, np_to_latex, sympy):
     A_sub = sympy.matrix2numpy(A.subs(constant_values), dtype=float) # Note need to set dtype to float for eig to work
 
-    # ISSUE 7: numpy returns (eigenvalues, eigenvectors), the opposite order
-    # to MATLAB's [V, D] = eig(A). So "T" here is the 1-D eigenvalue vector,
-    # which answers the FIXME below about why T isn't square. Should be:
-    #   D, T = np.linalg.eig(A_sub)   # D: eigenvalues (1-D), T: eigenvectors
-    # Note: this A has a double eigenvalue at 0 with only one eigenvector,
-    # so T is singular and T e^{Dt} T^-1 can't work here anyway.
-    # Use scipy expm(A*t) directly.
     # Equivalent to matlab eig(), see https://stackoverflow.com/a/51248586
-    T, D = np.linalg.eig(A_sub)
+    T, D = np.linalg.eig(A_sub)  # ⚠ ISSUE 7 (see red box)
 
     mo.md(f"""
     Substituting `constant_values` in: $$A={np_to_latex(A_sub)}$$
@@ -376,31 +379,26 @@ def _(A, constant_values, mo, np, np_to_latex, sympy):
     return A_sub, D, T
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 7: wrong return order.** `np.linalg.eig` returns `(eigenvalues, eigenvectors)`, the opposite of MATLAB's `[V, D] = eig(A)`. So "T" here is the 1-D eigenvalue vector, which answers the FIXME. Use `D, T = np.linalg.eig(A_sub)`.
+
+Even then, $T e^{Dt} T^{-1}$ fails for this $A$. The double eigenvalue at 0 has only one eigenvector, so $T$ is singular (rank 3). Use `scipy.linalg.expm(A_sub * t)` directly.
+"""), kind="danger")
+    return
+
+
 @app.cell
 def _(D, T, expm, np, plt):
-    # ISSUE 6: The linear model is in deviation coordinates about UPRIGHT,
-    # where theta_2 = 0. A_42 > 0 shows this is the unstable equilibrium,
-    # and MuJoCo's model is also upright at 0. theta_2 = pi here means
-    # "180 deg off upright", which the linear model can't represent.
-    # Use e.g. [0, 0.05, 0, 0].
-    x_0 = [0, np.pi, 1E-6, 1E-6] # Pointing straight up, no velocity
+    x_0 = [0, np.pi, 1E-6, 1E-6] # Pointing straight up, no velocity  # ⚠ ISSUE 6 (see red box)
 
     _t = np.linspace(0, 0.1, 1000)
 
     # Simulate the system
     # Fixme, why does this not broadcast across, and so we have to use a loop?
-    # ISSUE 7 (cont):
-    #  - enumerate() yields (index, value), so _ts is the INDEX and i is the
-    #    time. expm(D*_ts) therefore uses 0,1,2... seconds, not _t.
-    #  - expm needs a matrix: np.diag(D) (with the eig order fixed).
-    #  - _x_sim[_ts:] (with colon) overwrites every row from _ts onward;
-    #    you want _x_sim[_ts].
-    #  - print(D) inside the loop prints 1000 times.
-    # Vectorised alternative (also answers the broadcast FIXME):
-    #   _x_sim = np.array([expm(A_sub*tt) @ x_0 for tt in _t])
-    # or: control.initial_response(control.ss(A_sub, B_sub, np.eye(4), 0), _t, x_0)
     _x_sim = np.zeros((len(_t), 4))
-    for _ts, i in enumerate(_t):
+    for _ts, i in enumerate(_t):  # ⚠ ISSUE 7 (see red box)
         print(D)
         _x_sim[_ts:] = T @ expm(D*_ts) @ np.linalg.inv(T) @ x_0
 
@@ -414,12 +412,26 @@ def _(D, T, expm, np, plt):
     return i, x_0
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 6: wrong initial angle.** The linear model is in deviation coordinates about **upright**, where $\theta_2 = 0$. $A_{42}>0$ shows this is the unstable equilibrium, and MuJoCo is also upright at 0. $\theta_2 = \pi$ means "180° off upright", which the linear model can't represent. Use e.g. `[0, 0.05, 0, 0]`.
+
+**ISSUE 7 (cont.): loop bugs.**
+
+- `enumerate()` yields `(index, value)`, so `_ts` is the index and `expm(D*_ts)` uses 0, 1, 2… **seconds**.
+- `expm` needs a matrix, `np.diag(D)`.
+- `_x_sim[_ts:]` overwrites every following row; you want `_x_sim[_ts]`.
+- `print(D)` runs 1000 times.
+
+Simpler fix: `np.array([expm(A_sub*tt) @ x_0 for tt in _t])`, or `control.initial_response(...)`.
+"""), kind="danger")
+    return
+
+
 @app.cell
 def _(A_matrix, expm, np, plt):
     # Discretise the system matrix
-    # ISSUE 8: A_matrix comes from the "startup behaviour" cell further down,
-    # where it's built without dtype=float, so it's an object array. Use
-    # A_sub instead.
     _dt = 1E-3
     A_d = expm(A_matrix*_dt)
 
@@ -428,14 +440,9 @@ def _(A_matrix, expm, np, plt):
     _t = np.arange(0, 1, _dt)
 
     _x_sim = np.zeros((len(_t), 4)) # Theta 1, Theta 2, Theta 1 dot, Theta 2 dot
-    _x_sim[0] = [0, np.pi, 0.01, 0.01] # Pointing straight up, small velocity  (ISSUE 6: pi -> small angle)
-    # ISSUE 8: On the first pass _i = 0, so this reads _x_sim[-1] (the last
-    # row, all zeros) and the [_i:] slice writes zeros over the initial
-    # state. The whole trajectory comes out as zero. Should be:
-    #   for _i in range(1, len(_t)):
-    #       _x_sim[_i] = A_d @ _x_sim[_i-1]
+    _x_sim[0] = [0, np.pi, 0.01, 0.01] # Pointing straight up, small velocity
     for _i, _ts in enumerate(_t):
-        _x_sim[_i:] = A_d @ _x_sim[_i-1]
+        _x_sim[_i:] = A_d @ _x_sim[_i-1]  # ⚠ ISSUE 8 (see red box)
 
     #Plot
     _fig, _ax = plt.subplots()
@@ -443,6 +450,19 @@ def _(A_matrix, expm, np, plt):
     _ax.plot(_t, _x_sim[:,1], label="Theta 2")
     _ax.legend()
     return (A_d,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 8: this sim is all zeros.** On the first pass `_i = 0`, so it reads `_x_sim[-1]` (the last row, zeros). The `[_i:]` slice then writes zeros over $x(0)$. Use:
+```python
+for _i in range(1, len(_t)):
+    _x_sim[_i] = A_d @ _x_sim[_i-1]
+```
+Also, `A_matrix` comes from a later cell, where it's built without `dtype=float` (an object array). Use `A_sub` instead. Same $\theta_2=\pi$ problem as issue 6.
+"""), kind="danger")
+    return
 
 
 @app.cell(hide_code=True)
@@ -461,12 +481,16 @@ def _(mo):
 def _(A_sub, B, constant_values, control, np, sympy):
     B_sub = sympy.matrix2numpy(B.subs(constant_values),dtype=float)
 
-    # ISSUE 9: With both inputs, rank 4 is trivial because tau_2 drives the
-    # pendulum directly. The useful question is whether the system is
-    # controllable from the motor alone:
-    #   np.linalg.matrix_rank(control.ctrb(A_sub, B_sub[:, :1]))  # -> 4, it is
-    f"{np.linalg.matrix_rank(control.ctrb(A_sub, B_sub))=}"
+    f"{np.linalg.matrix_rank(control.ctrb(A_sub, B_sub))=}"  # ⚠ ISSUE 9 (see red box)
     return (B_sub,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 9: this check proves nothing.** With both inputs, rank 4 is trivial because $\tau_2$ drives the pendulum directly. The useful question is whether the system is controllable from the motor alone: `control.ctrb(A_sub, B_sub[:, :1])`. It is (rank 4), so a working controller exists.
+"""), kind="danger")
+    return
 
 
 @app.cell(hide_code=True)
@@ -477,14 +501,7 @@ def _(mo):
 
 @app.cell
 def _(A_sub, B_sub, control, mo, np, np_to_latex):
-    # ISSUE 10: Same problem as ISSUE 1. This K is 2x4 and assumes tau_2 can
-    # be applied. Using only the tau_1 row, the closed-loop eigenvalues are
-    # [-21.1, -1.15, -1.33, +21.0], so it's unstable. Use B_sub[:, :1].
-    # Also, poles at ~-1 rad/s are about 15x slower than the open-loop
-    # unstable pole (+14 rad/s with ISSUE 2 fixed). That's a fragile design:
-    # it needs very precise gains and gives a large arm swing. Start with
-    # poles a bit faster than ~|14| rad/s, or just use LQR.
-    K = control.place(A_sub, B_sub, [-1.1, -1.2, -1.3, -1.4])
+    K = control.place(A_sub, B_sub, [-1.1, -1.2, -1.3, -1.4])  # ⚠ ISSUE 10 (see red box)
 
 
     mo.md(f"""
@@ -499,30 +516,29 @@ def _(A_sub, B_sub, control, mo, np, np_to_latex):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 10: same problem as issue 1.** This $K$ is 2×4 and assumes $\tau_2$ can be applied. With only the $\tau_1$ row, the closed-loop eigenvalues are $[-21.1, -1.15, -1.33, \mathbf{+21.0}]$, so it's unstable. Use `B_sub[:, :1]`.
+
+Poles at ~−1 rad/s are also ~15× slower than the open-loop unstable pole (+14 rad/s once issue 2 is fixed). That's a fragile design: it needs very precise gains and gives a large arm swing. Place poles beyond ~|14| rad/s, or use LQR.
+"""), kind="danger")
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md("""Plot startup behaviour. Should ideally return to zero!""")
     return
 
 
 @app.cell
 def _(A, B, K, constant_values, control, mo, np, plt, sympy):
-    # ISSUE 11: This never simulates the closed loop.
-    #  - matrix2numpy without dtype=float gives object arrays (see ISSUE 8).
-    #  - C is the OUTPUT matrix (y = Cx), not a control matrix. For full
-    #    state output, use np.eye(4).
-    #  - StateSpace(A, B, K[1], D) is the OPEN-LOOP plant, with output = the
-    #    tau_2 row of K applied to x. The closed loop is A - B K, using the
-    #    tau_1-only K (ISSUE 1):
-    #      cl = control.ss(A_sub - B_sub[:, :1] @ K1, B_sub[:, :1], np.eye(4), 0)
-    #  - X0 has theta_2 = pi (ISSUE 6), and T=0.1 is 0.1 s, not one second.
-    #  - x[2], x[3] are the VELOCITIES, but they're labelled theta_1, theta_2.
-    #    The angles are x[0], x[1].
     A_matrix = sympy.matrix2numpy(A.subs(constant_values))
     B_matrix = sympy.matrix2numpy(B.subs(constant_values))
 
     C_matrix = [0, 0, 0, 0] # Control matrix. TODO: What is order?
     D_matrix = [0, 0] # Feed through, zero
 
-    statespace = control.StateSpace(A_matrix, B_matrix, K[1], D_matrix)
+    statespace = control.StateSpace(A_matrix, B_matrix, K[1], D_matrix)  # ⚠ ISSUE 11 (see red box)
 
     _resp = control.initial_response(statespace, T=0.1, X0=[0, np.pi, 0, 0]) # Simulate one second of time
 
@@ -535,14 +551,33 @@ def _(A, B, K, constant_values, control, mo, np, plt, sympy):
     return A_matrix, B_matrix, C_matrix, D_matrix, statespace
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 11: this never simulates the closed loop.**
+
+- `StateSpace(A, B, K[1], D)` is the **open-loop** plant, whose output is the $\tau_2$ row of $K$ applied to $x$. The closed loop is $A - BK$ with the $\tau_1$-only $K$: `control.ss(A_sub - B_sub[:, :1] @ K1, B_sub[:, :1], np.eye(4), 0)`.
+- `C` is the **output** matrix ($y = Cx$), not a control matrix. Use `np.eye(4)` for full state output.
+- `x[2]` and `x[3]` are **velocities**, but they're labelled $\theta_1, \theta_2$. The angles are `x[0]` and `x[1]`.
+- `T=0.1` is 0.1 s, not one second. `X0` has $\theta_2=\pi$ (issue 6).
+- `matrix2numpy` without `dtype=float` gives object arrays.
+"""), kind="danger")
+    return
+
+
 @app.cell
 def _(control, plt, statespace):
-    # (ISSUE 11 cont.) This is the Bode plot of the unstable open-loop plant
-    # seen through the tau_2 row of K, so it tells you little. If you want
-    # stability margins, look at the loop gain K1 (sI - A)^-1 B[:, :1].
     _resp = control.frequency_response(statespace)
     _resp.plot()
     plt.show()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 11 (cont.):** This is the Bode plot of the unstable open-loop plant, seen through the $\tau_2$ row of $K$, so it tells you little. For stability margins, use the loop gain $K_1(sI-A)^{-1}B_{:,1}$.
+"""), kind="danger")
     return
 
 
@@ -571,30 +606,36 @@ def _(A_sub, B_sub, control, mo, np, np_to_latex):
     #    u_max = [0.2, 0.001] # Max torque is 0.2Nm
     #)
 
-    # ISSUE 1 (where it bites): with both inputs, K_lqr is roughly
-    #   tau_1 row: [ 100.0,   0.65,  707.1,   6.54]
-    #   tau_2 row: [  -0.65, 100.0,   -4.6, 1000.0]
-    # The pendulum is balanced almost entirely by tau_2 (gains 100 and 1000
-    # on theta_2, theta_2_dot), i.e. a motor on the pendulum joint that
-    # doesn't exist. Keeping only the tau_1 row leaves closed-loop
-    # eigenvalues [-1.3e6, -0.14, +20.75, -20.75], so it's unstable.
-    # Fix: design with the real actuator only:
-    #   K_lqr = control.lqr(A_sub, B_sub[:, :1], Q, R[:1, :1])[0]   # 1x4
-    # On this (ISSUE 2-affected) model that gives about
-    # [-100, 42247, -718, 2261]: large theta_2 gains, as expected.
-    # Also:
-    #  - R = 1e-4 is arbitrary. Use the Bryson's rule version below with
-    #    u_max equal to the real torque limit. At 12 V stall the motor gives
-    #    only ~0.15 N m (ISSUE 3). mujoco's ctrlrange of +-0.4 N m is
-    #    optimistic.
-    #  - Getting J_1 right (ISSUE 4) matters more than tuning Q/R.
-    K_lqr = control.lqr(A_sub, B_sub, Q, R)[0]
+    K_lqr = control.lqr(A_sub, B_sub, Q, R)[0]  # ⚠ ISSUE 1 (see red box)
 
     mo.md(f"""$K_{{LQR}} = {np_to_latex(K_lqr.T)}$
 
     First column is output $\\tau_1$, second is $\\tau_2$
     """)
     return C, K_lqr, Q, R, brysons_rule
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 1: this is where it bites.** With both inputs, $K_{LQR}$ is roughly:
+
+| row | $\theta_1$ | $\theta_2$ | $\dot\theta_1$ | $\dot\theta_2$ |
+|---|---|---|---|---|
+| $\tau_1$ | 100 | 0.65 | 707 | 6.5 |
+| $\tau_2$ | −0.65 | **100** | −4.6 | **1000** |
+
+The pendulum is balanced almost entirely by $\tau_2$, a motor on the pendulum joint that doesn't exist. Keeping only the $\tau_1$ row gives closed-loop eigenvalues $[-1.3\times10^6, -0.14, \mathbf{+20.75}, -20.75]$, so it's unstable.
+
+**Fix:** design with the real actuator only:
+`K_lqr = control.lqr(A_sub, B_sub[:, :1], Q, R[:1, :1])[0]`. That gives large $\theta_2$ gains, as expected.
+
+Also:
+
+- $R = 10^{-4}$ is arbitrary. Use Bryson's rule with $u_{max}$ set to the real limit, ~0.15 N m at 12 V stall (issue 3). MuJoCo's ±0.4 N m is optimistic.
+- Getting $J_1$ right (issue 4) matters more than tuning $Q$ and $R$.
+"""), kind="danger")
+    return
 
 
 @app.cell(hide_code=True)
@@ -614,42 +655,45 @@ def _(mo):
         Note, this only works as we have limited back EMF from not moving very fast!
         """
     )
-    # ISSUE 3: The unit conversion above is wrong in several places:
-    #  - K_v = 140 RPM/V = 140 * 2*pi/60 = 14.66 rad/s/V. The text writes
-    #    "60*2*pi/60 = 2*pi" but then quotes 14.66, and later divides 6.28
-    #    (not 14.66) by R.
-    #  - 6.28/5.6 = 1.12, not 2.61.
-    #  - The constant that matters is K_t = 1/K_v = 0.0682 N m/A, not K_v.
-    #    At stall, tau = (K_t/R) * V = 0.0122 N m/V, so V = tau * R/K_t =
-    #    82.1 * tau.
-    #  => Voltage gains are K_V = 82.1 * K_tau. The code uses
-    #     2.61 * K_tau, about 31x too small. That's enough to explain the
-    #     hardware failing even with a good K.
-    #  - Back-EMF is not small for a pendulum stabiliser, since the arm
-    #    flicks fast. The motor torque is really
-    #       tau_1 = (K_t/R) V - (K_t^2/R) theta_1_dot
-    #    i.e. extra damping of 8.3e-4 N m s/rad on theta_1. Model it
-    #    directly in volts:
-    #       b_1 += K_t^2/R   (A_33, A_43 terms)
-    #       B[:, 0] *= K_t/R (input becomes volts)
-    #    Then LQR gives volt gains directly with no conversion step.
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 3: the conversion above is wrong.**
+
+- $K_v$ = 140 RPM/V = $140 \cdot 2\pi/60$ = 14.66 rad/s/V. The text writes "$=2\pi$", then 14.66, then divides 6.28 by $R$.
+- 6.28 / 5.6 = 1.12, not 2.61.
+- The constant that matters is $K_t = 1/K_v$ = 0.0682 N m/A. At stall, $\tau = (K_t/R)V$ = 0.0122 N m/V, so $V = 82.1\,\tau$.
+
+So voltage gains are $K_V = 82.1\,K_\tau$. The code uses $2.61\,K_\tau$, which is **~31× too small**. That alone explains the hardware failing.
+
+Back-EMF isn't small either, because the arm flicks fast: $\tau_1 = (K_t/R)V - (K_t^2/R)\dot\theta_1$. That's an extra damping of 8.3×10⁻⁴ N m s/rad on $\theta_1$. Model it directly in volts: add $K_t^2/R$ to $b_1$ and scale `B[:, 0]` by $K_t/R$. LQR then gives volt gains directly.
+"""), kind="danger")
     return
 
 
 @app.cell
 def _(K_lqr, Matrix, latex, mo, np, np_to_latex, x):
-    # ISSUE 12:
-    #  - 2.61 should be 82.1 (ISSUE 3).
-    #  - The "second column" of K_lqr.T is the tau_2 row. It's not "usefully
-    #    very small": it's the part that balances the pendulum (ISSUE 1).
-    #  - (_k_symbolic * x)[0] is tau_1 (or V), not theta_1_dot, and the
-    #    control law is u = -K x (minus sign missing).
-    _k_symbolic = Matrix(np.round(K_lqr*2.61, 3))
+    _k_symbolic = Matrix(np.round(K_lqr*2.61, 3))  # ⚠ ISSUE 3/12 (see red box)
     mo.md(f"""Gains $K_{{LQR}} = {np_to_latex(K_lqr.T*2.61)}$
 
     Ignoring the second column as its usefully very small (we can't set $\\theta_2$ anyway)
     $$\\dot\\theta_1 = {latex((_k_symbolic * x)[0])}$$
     """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**ISSUE 12:**
+
+- The factor should be 82.1, not 2.61 (issue 3).
+- The "second column" is the $\tau_2$ row. It isn't "usefully very small": it's the part that balances the pendulum (issue 1).
+- The expression shown is $\tau_1$ (or $V$), not $\dot\theta_1$. The control law is $u = -Kx$, so the minus sign is missing.
+"""), kind="danger")
     return
 
 
@@ -710,8 +754,6 @@ def _():
 def _(np):
     def np_to_latex(a, dp=3):
         ''' Display a numpy matrix as latex. Fixme, doesn't show imaginary part?'''
-        # (Minor) str() of a complex array prints "1.+2.j"; .split() keeps it
-        # but the "j" isn't LaTeX. Handle complex via a.real / a.imag.
         # return latex(sympy.Matrix(a))
 
         a = a.round(dp)
@@ -725,6 +767,14 @@ def _(np):
         rv +=  [r'\end{bmatrix}']
         return '\n'.join(rv)
     return (np_to_latex,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.callout(mo.md(r"""
+**Minor:** For complex arrays, `str()` prints `1.+2.j`, which isn't valid LaTeX. Handle complex values with `a.real` and `a.imag`. (Also, "Furata" → "Furuta" throughout.)
+"""), kind="warn")
+    return
 
 
 @app.cell
